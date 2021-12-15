@@ -6,6 +6,7 @@ body {
   font-family: 'Open Sans', Arial, Helvetica, sans-serif;
   color: grey;
   background-color: black;
+  text-shadow: -1px -1px 0 #2a2a2a, 1px -1px 0 #2a2a2a, -1px 1px 0 #2a2a2a, 1px 1px 0 #2a2a2a;
 }
 
 main {
