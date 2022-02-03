@@ -67,22 +67,25 @@ Exchange `// Threshold background coloring.` part with
 // Nighttime
 
     // Threshold background coloring.
-    $('body').css('background-color', 'black');
-
     if (bgNum < bgLow) {
-        $('body').css('color', red);
+        $('body').css('background-color', red);
+        $('body').css('color', 'white');
     }
     if ((bgLow <= bgNum) && (bgNum < bgTargetBottom)) {
-        $('body').css('color', blue);
+        $('body').css('background-color', blue);
+        $('body').css('color', 'white');
     }
     if ((bgTargetBottom <= bgNum) && (bgNum < bgTargetTop)) {
+        $('body').css('background-color', 'black');
         $('body').css('color', green);
     }
     if ((bgTargetTop <= bgNum) && (bgNum < bgHigh)) {
+        $('body').css('background-color', 'black');
         $('body').css('color', yellow);
     }
     if (bgNum >= bgHigh) {
-        $('body').css('color', red);
+        $('body').css('background-color', red);
+        $('body').css('color', 'white');
     }
 }
 ````
