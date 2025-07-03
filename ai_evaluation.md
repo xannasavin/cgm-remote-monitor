@@ -113,6 +113,7 @@ A new section in Admin Tools allows you to monitor LLM usage:
         *   Standard Nightscout `admin` roles typically have wildcard (`*`) permissions, which includes this.
         *   If you are using custom administrative roles, you **must** ensure that the role assigned to users managing AI prompts includes the exact permission string `admin:api:ai_settings:edit`. This can usually be done via the "Roles" section in the Admin Tools of your Nightscout site.
         *   Check Nightscout server logs for authorization errors (e.g., "Unauthorized" or messages related to permissions) if saving fails.
+        *   The system now includes a retry mechanism (up to 3 attempts with increasing delays) for saving prompts if initial database write acknowledgments fail. If saving still fails after retries, server logs will show multiple attempt failures and potentially more detailed error information from the database driver. Persistent failures after retries may indicate a more significant issue with the MongoDB connection or server on your hosting platform.
 
 ## Technical Documentation
 
