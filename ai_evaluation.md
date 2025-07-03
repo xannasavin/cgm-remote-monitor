@@ -17,6 +17,7 @@ This document serves as both a user manual and technical documentation for the p
 *   **Dynamic Data Injection:** The `{{CGMDATA}}` token in the user prompt is replaced with the actual JSON data from the selected report period.
 *   **Debugging Mode:** An option to display the exact prompts and model sent to the LLM, shown above the LLM's response in the AI Evaluation tab.
 *   **Secure API Key Handling:** The LLM API key is stored as a server-side environment variable and is not exposed to the client.
+*   **Token Usage Tracking:** Automatically tracks the number of tokens consumed and API calls made to the LLM, viewable in Admin Tools.
 
 ## User Guide
 
@@ -60,6 +61,19 @@ For more flexible and persistent prompt management:
     *   These prompts are stored in the Nightscout database and will be used for all AI evaluations.
     *   The User Prompt Template saved here overrides the `AI_LLM_PROMPT` environment variable.
 
+#### c. Viewing AI Usage Statistics (Admin Tools)
+
+A new section in Admin Tools allows you to monitor LLM usage:
+
+1.  Navigate to **Admin Tools** in your Nightscout site.
+2.  Locate the section titled **"AI Usage Statistics"**.
+3.  This section displays a table with:
+    *   **Month (YYYY-MM):** The calendar month of usage.
+    *   **Total Tokens Consumed:** The sum of tokens used in that month (according to the LLM API response).
+    *   **Total API Calls:** The number of successful calls to the LLM in that month.
+    *   **Last Updated (UTC):** The timestamp of the most recent usage record for that month.
+4.  This data helps monitor the volume of LLM interactions. Cost estimation is not directly provided in this view but can be inferred from token counts if you know your LLM provider's pricing.
+
 ### 2. Generating an AI Evaluation
 
 1.  **Navigate to Reports:** Go to the "Reports" section of your Nightscout site.
@@ -95,7 +109,10 @@ For more flexible and persistent prompt management:
 *   **"Report data not loaded yet..." Message:** Always load data via a standard report's "Show" button first before using the AI Evaluation tab.
 *   **Admin UI Save/Load Issues:**
     *   Ensure your Nightscout instance can connect to its MongoDB database and has write permissions.
-    *   The user/role attempting to save prompts must have the `admin:api:ai_settings:edit` permission. This might need to be explicitly added to your admin role configuration. Check server logs for authorization errors if saving fails.
+    *   The user/role attempting to save prompts must have the `admin:api:ai_settings:edit` permission.
+        *   Standard Nightscout `admin` roles typically have wildcard (`*`) permissions, which includes this.
+        *   If you are using custom administrative roles, you **must** ensure that the role assigned to users managing AI prompts includes the exact permission string `admin:api:ai_settings:edit`. This can usually be done via the "Roles" section in the Admin Tools of your Nightscout site.
+        *   Check Nightscout server logs for authorization errors (e.g., "Unauthorized" or messages related to permissions) if saving fails.
 
 ## Technical Documentation
 
@@ -116,30 +133,52 @@ For more flexible and persistent prompt management:
     *   Renders textareas for system and user prompts.
     *   Fetches current prompts from `/api/v1/ai_settings/prompts` (GET).
     *   Saves prompts via `/api/v1/ai_settings/prompts` (POST).
+*   **`lib/admin_plugins/ai_usage_viewer.js`:** (New)
+    *   Admin plugin to display monthly AI token usage statistics.
+    *   Fetches data from `/api/v1/ai_usage/monthly_summary`.
 *   **`lib/admin_plugins/index.js`:**
-    *   Registered the new `ai_settings` admin plugin.
+    *   Registered the `ai_settings` and `ai_usage_viewer` admin plugins.
 *   **`lib/api/ai_settings_api.js`:**
     *   New file defining API endpoints for managing AI prompts:
         *   `GET /api/v1/ai_settings/prompts`: Fetches prompts from MongoDB.
         *   `POST /api/v1/ai_settings/prompts`: Saves prompts to MongoDB. Requires `admin:api:ai_settings:edit` permission.
+*   **`lib/api/ai_usage_api.js`:** (New)
+    *   New file defining API endpoints for tracking AI usage:
+        *   `POST /api/v1/ai_usage/record`: Records token usage. Called internally by `/api/v1/ai_eval`.
+        *   `GET /api/v1/ai_usage/monthly_summary`: Retrieves aggregated monthly usage data.
 *   **`lib/api/index.js`:**
-    *   Registered the `/ai_settings` API router.
+    *   Registered the `/ai_settings` and `/ai_usage` API routers.
     *   Modified the `/api/v1/ai_eval` (POST) endpoint:
         *   Now an `async` function.
         *   Fetches prompts from the database (via `ctx.store`) with fallback to environment variables/defaults.
         *   Replaces `{{CGMDATA}}` token in the user prompt.
         *   Uses `req.settings.ai_llm_model` for the LLM payload.
         *   If `req.settings.ai_llm_debug` is true, includes `debug_prompts` in the JSON response to the client.
-        *   Uses `ctx.authorization.isPermitted('api:treatments:read')` for authorization.
+        *   After a successful LLM call, extracts `total_tokens` from the LLM response and calls `POST /api/v1/ai_usage/record` to save usage.
+        *   Uses `ctx.authorization.isPermitted('api:treatments:read')` for authorization of the main evaluation.
 
 ### 2. Database Changes
 
-*   A new MongoDB collection named `ai_prompt_settings` is used.
-*   It typically stores a single document with `_id: "main_config"` containing:
-    *   `system_prompt` (String)
-    *   `user_prompt_template` (String)
-    *   `updated_at` (Date)
-*   The `upsert: true` option is used, so this document and collection will be created automatically on the first save if they don't exist.
+*   **`ai_prompt_settings` collection:**
+    *   Stores AI prompt configurations.
+    *   Typically a single document with `_id: "main_config"` containing:
+        *   `system_prompt` (String)
+        *   `user_prompt_template` (String)
+        *   `updated_at` (Date)
+    *   `upsert: true` is used for creation/update.
+*   **`ai_usage_stats` collection:** (New)
+    *   Stores monthly AI token usage statistics.
+    *   Documents use `_id` format: `"YYYY-MM"` (e.g., `"2023-10"`).
+    *   Each document contains:
+        *   `total_tokens_month` (Number): Total tokens consumed in that month.
+        *   `api_calls_month` (Number): Total successful API calls to LLM in that month.
+        *   `daily_usage_array` (Array): Array of objects, each representing a day:
+            *   `date` (String): Date string like `"YYYY-MM-DD"`.
+            *   `total_tokens_day` (Number): Tokens consumed on this specific day.
+            *   `api_calls_day` (Number): API calls made on this specific day.
+        *   `last_updated` (Date): Timestamp of the last update to this monthly record.
+    *   `upsert: true` is used for creation/update.
+
 
 ### 3. API Endpoints
 
@@ -156,6 +195,14 @@ For more flexible and persistent prompt management:
         *   **Request Body:** `{ system_prompt: "...", user_prompt_template: "..." }`
         *   **Authorization:** Requires `admin:api:ai_settings:edit` permission.
         *   **Functionality:** Saves the provided prompts to the database.
+*   **AI Usage Tracking:**
+    *   `POST /api/v1/ai_usage/record`
+        *   **Request Body:** `{ tokens_used: Number }`
+        *   **Authorization:** Currently uses `api:treatments:create` (placeholder, ideally a more specific permission like `api:ai_usage:record` or system-level access if only called internally).
+        *   **Functionality:** Records the number of tokens used for an AI evaluation. Updates monthly and daily aggregates in the `ai_usage_stats` collection. Called by `/api/v1/ai_eval` internally.
+    *   `GET /api/v1/ai_usage/monthly_summary`
+        *   **Authorization:** Currently uses `api:treatments:read` (placeholder, ideally `api:ai_usage:read` or admin-level).
+        *   **Functionality:** Returns all documents from the `ai_usage_stats` collection, providing a summary of token usage per month.
 
 ### 4. Data Flow for AI Evaluation
 
@@ -170,16 +217,19 @@ For more flexible and persistent prompt management:
     e.  Constructs the LLM payload (model, system message, final user message).
     f.  Makes a POST request to `AI_LLM_API_URL` with the payload and `AI_LLM_KEY`.
     g.  Receives the LLM's response.
-    h.  Constructs a JSON response for the client, including `html_content` (LLM's answer) and optionally `debug_prompts`.
+    h.  If the LLM call is successful and token information (e.g., `response.usage.total_tokens`) is available, makes an internal POST request to `/api/v1/ai_usage/record` with the token count.
+    i.  Constructs a JSON response for the client, including `html_content` (LLM's answer) and optionally `debug_prompts`.
 5.  Client-side script in `ai_eval.js` receives the response.
     a.  If `AI_LLM_DEBUG` is true and `debug_prompts` are present, displays them.
     b.  Displays `html_content`.
 
 ### 5. Permissions
 
-*   Access to the AI Evaluation tab and generating evaluations is implicitly controlled by the ability to view reports (e.g., `api:treatments:read` permission for the `/api/v1/ai_eval` endpoint).
-*   Viewing the configured prompts via `GET /api/v1/ai_settings/prompts` also currently uses `api:treatments:read`.
-*   Saving/modifying prompts via `POST /api/v1/ai_settings/prompts` requires the permission `admin:api:ai_settings:edit`. This permission string might need to be explicitly added to admin roles in the Nightscout authorization configuration if it doesn't map to an existing wildcard.
+*   **AI Evaluation (`POST /api/v1/ai_eval`):** Requires `api:treatments:read` (or similar report viewing permission).
+*   **Prompt Settings (`GET /api/v1/ai_settings/prompts`):** Requires `api:treatments:read`.
+*   **Prompt Settings (`POST /api/v1/ai_settings/prompts`):** Requires `admin:api:ai_settings:edit`. This permission string might need to be explicitly added to custom admin roles.
+*   **Usage Recording (`POST /api/v1/ai_usage/record`):** Called internally by `/ai_eval`. Currently uses `api:treatments:create` as a placeholder. For enhanced security, a dedicated system-level permission or internal authentication mechanism would be ideal if this endpoint were exposed more broadly.
+*   **Usage Summary (`GET /api/v1/ai_usage/monthly_summary`):** Currently uses `api:treatments:read`. Ideally, this would be a more specific `api:ai_usage:read` or an admin-level permission.
 
 ---
 This markdown file should provide a comprehensive overview for both users and developers.
