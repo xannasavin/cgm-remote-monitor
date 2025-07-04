@@ -124,21 +124,21 @@ A new section in Admin Tools allows you to monitor LLM usage:
 *   **`lib/settings.js`:**
     *   Settings like `ai_llm_model` and `ai_llm_debug` are read from environment variables. `AI_LLM_PROMPT` is no longer used.
 *   **`lib/report_plugins/ai_eval.js`:**
-    *   The main file for the "AI Evaluation" report tab UI and client-side logic.
-    *   **UI Changes:**
-        *   Removed the dedicated "Show AI Evaluation" button.
-        *   Added new HTML elements: `#ai-eval-status-area` for configuration status and errors, `#ai-eval-debug-info` for debug output, and `#ai-eval-results` for LLM responses.
-    *   **Automatic Trigger:**
-        *   Performs a comprehensive settings check (client settings, server prompts via API) when the tab is activated.
-        *   Displays detailed error messages if settings are missing, or a success message if all are configured.
-        *   Automatically triggers the AI evaluation via the `report()` function when main report data is available and all settings are valid.
-    *   **Data Payload:**
-        *   Constructs a detailed JSON payload for the `{{CGMDATA}}` token. This includes `reportSettings` (targets, units, dates, report name), `entries` (SGV, MBG), `treatments` (insulin, carbs, notes, timestamps), `profile` data (timezone, basal, CR, ISF, fetched via `client.profile()`), and `deviceStatus` data.
-    *   **AJAX Call & Display:**
-        *   Makes an AJAX POST request to `/api/v1/ai_eval` with the constructed data payload.
-        *   Displays the LLM's HTML response.
-        *   If `AI_LLM_DEBUG` is true, displays formatted debug information (model, system prompt, final user prompt with data) in `#ai-eval-debug-info`.
-        *   Displays the `tokens_used` for the current request.
+    *   Defines the "AI Evaluation" report tab.
+    *   Its `html: function(client)` method generates the static HTML structure for the tab (divs for status, results, debug info).
+    *   **Crucially, all client-side JavaScript logic for the tab is now embedded within a `<script>` tag generated inside the `html()` method's output.** This embedded script runs when the tab is activated.
+    *   **Embedded Script Functionality:**
+        *   Uses an Immediately Invoked Function Expression (IIFE) to scope its variables.
+        *   Receives the `client` object (which includes `client.settings`, `client.translate`, `client.$` for jQuery) from the `html` function's context.
+        *   Initializes UI elements and performs a comprehensive settings check (`performComprehensiveSettingsCheck`) on tab load. This check includes client-side settings (API URL, Model) and an AJAX call to fetch custom prompt status from `/api/v1/ai_settings/prompts`.
+        *   Displays detailed status messages (errors, warnings, info) in the `#ai-eval-status-area`.
+        *   Sets a flag (`client.aiEvalConfigIsValid`) on the `client` object indicating if the critical configuration (primarily API URL) is valid.
+        *   Defines a function `client.triggerAIEvaluation(cgmDataPayload)` (attaching it to the `client` object) which handles the AJAX POST request to `/api/v1/ai_eval`, processes the response, and updates the UI with results, debug info, and token usage.
+    *   The plugin's `report: function(client, datastorage, ...)` method:
+        *   Is called when main report data is loaded.
+        *   Stores the data.
+        *   Checks `client.aiEvalConfigIsValid`.
+        *   If valid and data is present, it prepares the `cgmDataPayload` (including report settings, entries, treatments, profile data, device status) and calls `client.triggerAIEvaluation(cgmDataPayload)` to initiate the AI analysis.
 *   **`lib/admin_plugins/ai_settings.js`:**
     *   New admin plugin for the UI in Admin Tools to manage AI prompts.
     *   Renders textareas for system and user prompts.
