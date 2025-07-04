@@ -34,15 +34,11 @@ The following environment variables must be set on your Nightscout server. After
     *   **Description:** The API endpoint URL for your chosen LLM.
     *   *Example (OpenAI compatible):* `https://api.openai.com/v1/chat/completions`
 *   `AI_LLM_MODEL` (Required)
-    *   **Description:** The specific model name for the LLM.
-    *   *Default (if not set, but recommended to set explicitly):* `gpt-4o`
+    *   **Description:** The specific model name for the LLM. If not set, the server may use its own default (e.g., `gpt-4o`), but explicitly setting this is recommended to ensure desired behavior.
     *   *Examples:* `gpt-4o`, `gpt-4-turbo`, `claude-3-opus-20240229` (ensure compatibility with your API key/URL).
-*   `AI_LLM_PROMPT` (Fallback User Prompt Template)
-    *   **Description:** The default user prompt template used if no prompt is configured in the Admin UI. Must include the `{{CGMDATA}}` token.
-    *   *Default:* `"Analyze the provided glucose data. Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
 *   `AI_LLM_DEBUG` (Optional)
     *   **Description:** Set to `true` to enable debugging output on the AI Evaluation report tab.
-    *   *Default:* `false`
+    *   *Default:* `false` (If the variable is not set, it defaults to false).
     *   When enabled, this shows the model, system prompt, user prompt template, and the final user prompt (with data injected) above the LLM's response.
 
 #### b. Admin UI for Prompts (Recommended)
@@ -59,7 +55,10 @@ For more flexible and persistent prompt management:
         *   *Example:* `Please analyze the following CGM data: {{CGMDATA}}. Focus on identifying periods of high variability, potential causes for hypoglycemia, and effectiveness of carbohydrate corrections. Provide actionable advice in bullet points.`
 4.  Click the **"Save Prompts"** button (this is the default button for the admin section, usually labeled "Configure AI Prompts" or similar based on the action's `buttonLabel` which is "Save Prompts" in the plugin's definition).
     *   These prompts are stored in the Nightscout database and will be used for all AI evaluations.
-    *   The User Prompt Template saved here overrides the `AI_LLM_PROMPT` environment variable.
+    *   **Important:** If you leave the "System Prompt" or "User Prompt Template" fields empty in the Admin UI (or if they haven't been configured yet), the server will automatically use built-in default prompts for the AI evaluation.
+        *   **Default System Prompt:** `"You are an expert for diabetes and analyzing cgm data from nightscout"`
+        *   **Default User Prompt Template:** `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
+    *   It is recommended to review and customize these prompts in the Admin UI to best suit your analytical needs.
 
 #### c. Viewing AI Usage Statistics (Admin Tools)
 
@@ -123,9 +122,7 @@ A new section in Admin Tools allows you to monitor LLM usage:
 ### 1. New Files and Key Modifications
 
 *   **`lib/settings.js`:**
-    *   Added new settings: `ai_llm_model`, `ai_llm_debug`.
-    *   `ai_llm_prompt` now serves as a fallback for the user prompt template.
-    *   Added `mapTruthy` for `ai_llm_debug`.
+    *   Settings like `ai_llm_model` and `ai_llm_debug` are read from environment variables. `AI_LLM_PROMPT` is no longer used.
 *   **`lib/report_plugins/ai_eval.js`:**
     *   The main file for the "AI Evaluation" report tab UI and client-side logic.
     *   **UI Changes:**
@@ -162,14 +159,15 @@ A new section in Admin Tools allows you to monitor LLM usage:
         *   `GET /api/v1/ai_usage/monthly_summary`: Retrieves aggregated monthly usage data.
 *   **`lib/api/index.js`:**
     *   Registered the `/ai_settings` and `/ai_usage` API routers.
-    *   Modified the `/api/v1/ai_eval` (POST) endpoint:
-        *   Now an `async` function.
-        *   Fetches prompts from the database (via `ctx.store`) with fallback to environment variables/defaults.
-        *   Replaces `{{CGMDATA}}` token in the user prompt.
-        *   Uses `req.settings.ai_llm_model` for the LLM payload.
-        *   If `req.settings.ai_llm_debug` is true, includes `debug_prompts` in the JSON response to the client.
-        *   After a successful LLM call, extracts `total_tokens` from the LLM response and calls `POST /api/v1/ai_usage/record` to save usage.
-        *   Uses `ctx.authorization.isPermitted('api:treatments:read')` for authorization of the main evaluation.
+    *   Modified the `/api/v1/ai_eval` (POST) endpoint (likely located within `lib/api/index.js`):
+        *   No longer uses `AI_LLM_PROMPT` environment variable.
+        *   Fetches System and User prompts from the database (`ai_prompt_settings` collection).
+        *   If prompts are not found in the database or are empty, it uses hardcoded default fallbacks:
+            *   Default System Prompt: `"You are an expert for diabetes and analyzing cgm data from nightscout"`
+            *   Default User Prompt Template: `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
+        *   Continues to use `req.settings.ai_llm_key`, `req.settings.ai_llm_api_url`, `req.settings.ai_llm_model`.
+        *   Includes debug information if `req.settings.ai_llm_debug` is true.
+        *   Records token usage.
 
 ### 2. Database Changes
 
@@ -242,12 +240,16 @@ A new section in Admin Tools allows you to monitor LLM usage:
     b.  It sends the `cgmDataPayload` as a JSON body in a `POST` request to `/api/v1/ai_eval`.
 5.  **Server-side `/api/v1/ai_eval` endpoint:**
     a.  Retrieves `AI_LLM_KEY`, `AI_LLM_API_URL`, `AI_LLM_MODEL`, `AI_LLM_DEBUG` from `req.settings`.
-    b.  Fetches `system_prompt` and `user_prompt_template` from the `ai_prompt_settings` MongoDB collection (or uses fallbacks if not found in DB but present in environment variables).
-    c.  The received `cgmDataPayload` (from the request body) is stringified and injected into the `{{CGMDATA}}` token of the `user_prompt_template`.
-    d.  Constructs the final LLM payload (model, system message, final user message with injected data).
-    e.  Makes a POST request to the configured `AI_LLM_API_URL` with the LLM payload and `AI_LLM_KEY`.
-    f.  Receives the LLM's response.
-    g.  If the LLM call is successful and token information (e.g., `response.data.usage.total_tokens` for OpenAI) is available, it makes an internal POST request to `/api/v1/ai_usage/record` with the `total_tokens`.
+    b.  Fetches `system_prompt` and `user_prompt_template` from the `ai_prompt_settings` MongoDB collection.
+    c.  If the prompts from the database are empty or not found, the server applies new hardcoded default prompts:
+        *   Default System Prompt: `"You are an expert for diabetes and analyzing cgm data from nightscout"`
+        *   Default User Prompt Template: `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
+        *   The `AI_LLM_PROMPT` environment variable is no longer used for prompts.
+    d.  The received `cgmDataPayload` (from the request body) is stringified and injected into the `{{CGMDATA}}` token of the effective user prompt template (custom or default).
+    e.  Constructs the final LLM payload (model, effective system prompt, final user message with injected data).
+    f.  Makes a POST request to the configured `AI_LLM_API_URL` with the LLM payload and `AI_LLM_KEY`.
+    g.  Receives the LLM's response.
+    h.  If the LLM call is successful and token information (e.g., `response.data.usage.total_tokens` for OpenAI) is available, it makes an internal POST request to `/api/v1/ai_usage/record` with the `total_tokens`.
     h.  Constructs a JSON response for the client. This response includes:
         *   `html_content`: The LLM's answer.
         *   `tokens_used`: The number of tokens consumed for this specific request.
