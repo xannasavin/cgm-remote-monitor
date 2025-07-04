@@ -223,20 +223,20 @@ A new section in Admin Tools allows you to monitor LLM usage:
 1.  **User loads data in a standard Nightscout report.** This action (e.g., clicking "Show" on the "Day to day" report) makes `datastorage`, `sorteddaystoshow`, and `options` available to plugins.
 2.  **User navigates to the "AI Evaluation" tab.**
     a.  The `script` in `lib/report_plugins/ai_eval.js` immediately performs a comprehensive settings check:
-    i.  Verifies client-side settings (`ai_llm_api_url`, `ai_llm_model`).
-    ii. Fetches server-side prompts (`system_prompt`, `user_prompt_template`) via `GET /api/v1/ai_settings/prompts`.
+        i.  Verifies client-side settings (`ai_llm_api_url`, `ai_llm_model`).
+        ii. Fetches server-side prompts (`system_prompt`, `user_prompt_template`) via `GET /api/v1/ai_settings/prompts`.
     b.  The UI in `#ai-eval-status-area` is updated with either a success message or a list of missing configurations.
 3.  **Main report data triggers AI evaluation (if settings are valid):**
     a.  The `report(datastorage, sorteddaystoshow, options)` function in `ai_eval.js` is called by Nightscout's report client when data is ready.
     b.  This function stores the data and then re-runs the settings check logic (or uses its current state).
     c.  If settings are valid and data is present:
-    i.  A `cgmDataPayload` object is constructed. This object contains:
-    *   `reportSettings`: Target glucose range, units, date range, report name.
-    *   `entries`: Array of SGV, MBG data points with timestamps.
-    *   `treatments`: Array of treatment data (insulin, carbs, notes, timestamps, etc.).
-    *   `profile`: Current active profile data (timezone, basal rates, ISF, carb ratios) obtained via `client.profile()`.
-    *   `deviceStatus`: Array of device status entries (if available in the loaded report data).
-    ii. `client.triggerAIEvaluation(cgmDataPayload)` is called.
+        i.  A `cgmDataPayload` object is constructed. This object contains:
+            *   `reportSettings`: Target glucose range, units, date range, report name.
+            *   `entries`: Array of SGV, MBG data points with timestamps.
+            *   `treatments`: Array of treatment data (insulin, carbs, notes, timestamps, etc.).
+            *   `profile`: Current active profile data (timezone, basal rates, ISF, carb ratios) obtained via `client.profile()`.
+            *   `deviceStatus`: Array of device status entries (if available in the loaded report data).
+        ii. `client.triggerAIEvaluation(cgmDataPayload)` is called.
 4.  **Client-side AJAX request:**
     a.  `client.triggerAIEvaluation` sets the UI to a "Loading AI evaluation..." state.
     b.  It sends the `cgmDataPayload` as a JSON body in a `POST` request to `/api/v1/ai_eval`.
@@ -249,9 +249,9 @@ A new section in Admin Tools allows you to monitor LLM usage:
     f.  Receives the LLM's response.
     g.  If the LLM call is successful and token information (e.g., `response.data.usage.total_tokens` for OpenAI) is available, it makes an internal POST request to `/api/v1/ai_usage/record` with the `total_tokens`.
     h.  Constructs a JSON response for the client. This response includes:
-    *   `html_content`: The LLM's answer.
-    *   `tokens_used`: The number of tokens consumed for this specific request.
-    *   `debug_info` (if `AI_LLM_DEBUG` is true): An object containing `model`, `system_prompt`, and `final_user_prompt`.
+        *   `html_content`: The LLM's answer.
+        *   `tokens_used`: The number of tokens consumed for this specific request.
+        *   `debug_info` (if `AI_LLM_DEBUG` is true): An object containing `model`, `system_prompt`, and `final_user_prompt`.
 6.  **Client-side script in `ai_eval.js` receives the response:**
     a.  Displays the `html_content` in `#ai-eval-results`.
     b.  Displays the `tokens_used` information (e.g., in `#ai-eval-status-area` or near results).
