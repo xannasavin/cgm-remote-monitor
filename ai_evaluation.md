@@ -285,8 +285,8 @@ A new section in Admin Tools allows you to monitor LLM usage:
     *   `tokens_used`: The number of tokens consumed for this specific request.
     *   `debug_info` (if `AI_LLM_DEBUG` is true): An object containing `model`, `system_prompt`, and `final_user_prompt`.
 6.  **Client-side script in `ai_eval.js` receives the response:**
-    a.  Displays the `html_content` in `#ai-eval-results`.
-    b.  Displays the `tokens_used` information (e.g., in `#ai-eval-status-area` or near results).
+    a.  Displays the `html_content` in `#aiResponseOutputArea`.
+    b.  Displays the `tokens_used` information (e.g., in `#aiStatistics`).
     c.  If `AI_LLM_DEBUG` is true and `debug_info` is present, it's formatted and displayed in `#ai-eval-debug-info`.
     d.  Handles and displays any errors received from the server.
 
