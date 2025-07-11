@@ -90,11 +90,11 @@ A new section in Admin Tools allows you to monitor LLM usage:
 
 *   **AI Evaluation:** The main content area will show the direct response from the LLM, based on your prompts and data. This may include text, lists, and potentially tables.
 *   **Token Usage:** Information about the number of tokens used for the current evaluation will be displayed (e.g., "Tokens used for this evaluation: XXXX"). This can help you monitor usage.
-*   **Debug Information (If Enabled):** If `AI_LLM_DEBUG` is set to `true` (see Configuration section), a dedicated "AI Debug Info" section will appear above the AI's response. This section will display:
-    *   **Model:** The LLM model used for the request.
-    *   **System Prompt:** The exact system prompt sent to the LLM.
-    *   **Final User Prompt (with data injected):** The complete user prompt after the `{{CGMDATA}}` token was replaced with your actual report data. This is very useful for understanding exactly what information the LLM received.
-    *   *(The User Prompt Template as stored in settings is not directly shown here, but the Final User Prompt reflects its use).*
+*   **Debug Information (If Enabled):** If `AI_LLM_DEBUG` is set to `true` (see Configuration section):
+    *   A dedicated debug area (labeled "AI PROMPT PAYLOAD (DEBUG):") will appear in the AI Evaluation tab.
+    *   **Currently, this area shows the complete JSON payload that *would be sent* to the LLM.** This includes the model, system prompt, the user prompt with `{{CGMDATA}}` replaced by your actual report data, and default values for temperature and max_tokens.
+    *   This is extremely useful for verifying that the data is being captured and formatted correctly before the actual LLM call is implemented.
+    *   *(Once LLM calls are active, this section will likely show the information sent and any direct debug output from the server for that specific call).*
 
 ### 4. Troubleshooting
 
@@ -125,20 +125,26 @@ A new section in Admin Tools allows you to monitor LLM usage:
     *   Settings like `ai_llm_model` and `ai_llm_debug` are read from environment variables. `AI_LLM_PROMPT` is no longer used.
 *   **`lib/report_plugins/ai_eval.js`:**
     *   Defines the "AI Evaluation" report tab.
-    *   Its `html: function(client)` method generates the static HTML structure for the tab (divs for status, results, debug info).
+    *   Its `html: function(client)` method generates the static HTML structure for the tab, including:
+        *   `#ai-eval-status-text`: For displaying settings status.
+        *   `#aiEvalDebugArea`: A pre-formatted area to show the constructed AI request payload when `AI_LLM_DEBUG` is true.
+        *   Placeholders for results (future).
     *   **Crucially, all client-side JavaScript logic for the tab is now embedded within a `<script>` tag generated inside the `html()` method's output.** This embedded script runs when the tab is activated.
-    *   **Embedded Script Functionality:**
-        *   Uses an Immediately Invoked Function Expression (IIFE) to scope its variables.
-        *   Receives the `client` object (which includes `client.settings`, `client.translate`, `client.$` for jQuery) from the `html` function's context.
-        *   Initializes UI elements and performs a comprehensive settings check (`performComprehensiveSettingsCheck`) on tab load. This check includes client-side settings (API URL, Model) and an AJAX call to fetch custom prompt status from `/api/v1/ai_settings/prompts`.
-        *   Displays detailed status messages (errors, warnings, info) in the `#ai-eval-status-area`.
-        *   Sets a flag (`client.aiEvalConfigIsValid`) on the `client` object indicating if the critical configuration (primarily API URL) is valid.
-        *   Defines a function `client.triggerAIEvaluation(cgmDataPayload)` (attaching it to the `client` object) which handles the AJAX POST request to `/api/v1/ai_eval`, processes the response, and updates the UI with results, debug info, and token usage.
-    *   The plugin's `report: function(client, datastorage, ...)` method:
-        *   Is called when main report data is loaded.
-        *   Stores the data.
-        *   Checks `client.aiEvalConfigIsValid`.
-        *   If valid and data is present, it prepares the `cgmDataPayload` (including report settings, entries, treatments, profile data, device status) and calls `client.triggerAIEvaluation(cgmDataPayload)` to initiate the AI analysis.
+    *   The plugin's `report: function(datastorage, sorteddaystoshow, options)` method:
+        *   Is called when the "Show" button for the AI Evaluation report is clicked.
+        *   It stores `datastorage`, `options`, and `sorteddaystoshow` onto a temporary global variable `window.tempAiEvalReportData`. This makes the data accessible to the client-side script that runs shortly after.
+    *   **Embedded Script Functionality (`initializeAiEvalTab` function):**
+        *   Is called when the tab is activated. It receives the `passedInClient` object.
+        *   Retrieves `reportData` from `window.tempAiEvalReportData` (if set by the `report` function).
+        *   Displays the status of various settings (Model, API Key info).
+        *   Fetches System and User prompt templates from `/api/v1/ai_settings/prompts` via AJAX and updates their status display.
+        *   **If `reportData` is available and prompts are fetched:**
+            *   It constructs the full AI request payload.
+            *   The `{{CGMDATA}}` placeholder in the user prompt template is replaced with a JSON string containing relevant parts of `reportData.datastorage` (e.g., entries, treatments, profile).
+            *   The payload includes the model from settings, the system prompt, the modified user prompt, and **hardcoded defaults for `temperature` (0.7) and `max_tokens` (2000)** as these are not yet configurable via Nightscout settings.
+            *   If `passedInClient.settings.ai_llm_debug` is `true`, this constructed payload is `JSON.stringify`-ed and displayed in the `#aiEvalDebugArea`.
+        *   Cleans up `window.tempAiEvalReportData` after processing.
+        *   **(Current Stage):** The script currently *only* constructs and displays this payload for debugging. It does *not* yet send it to the `/api/v1/ai_eval` endpoint.
 *   **`lib/admin_plugins/ai_settings.js`:**
     *   New admin plugin for the UI in Admin Tools to manage AI prompts.
     *   Renders textareas for system and user prompts.
@@ -218,39 +224,43 @@ A new section in Admin Tools allows you to monitor LLM usage:
 
 ### 4. Data Flow for AI Evaluation
 
-1.  **User loads data in a standard Nightscout report.** This action (e.g., clicking "Show" on the "Day to day" report) makes `datastorage`, `sorteddaystoshow`, and `options` available to plugins.
-2.  **User navigates to the "AI Evaluation" tab.**
-    a.  The `script` in `lib/report_plugins/ai_eval.js` immediately performs a comprehensive settings check:
-    i.  Verifies client-side settings (`ai_llm_api_url`, `ai_llm_model`).
-    ii. Fetches server-side prompts (`system_prompt`, `user_prompt_template`) via `GET /api/v1/ai_settings/prompts`.
-    b.  The UI in `#ai-eval-status-area` is updated with either a success message or a list of missing configurations.
-3.  **Main report data triggers AI evaluation (if settings are valid):**
-    a.  The `report(datastorage, sorteddaystoshow, options)` function in `ai_eval.js` is called by Nightscout's report client when data is ready.
-    b.  This function stores the data and then re-runs the settings check logic (or uses its current state).
-    c.  If settings are valid and data is present:
-    i.  A `cgmDataPayload` object is constructed. This object contains:
-    *   `reportSettings`: Target glucose range, units, date range, report name.
-    *   `entries`: Array of SGV, MBG data points with timestamps.
-    *   `treatments`: Array of treatment data (insulin, carbs, notes, timestamps, etc.).
-    *   `profile`: Current active profile data (timezone, basal rates, ISF, carb ratios) obtained via `client.profile()`.
-    *   `deviceStatus`: Array of device status entries (if available in the loaded report data).
-    ii. `client.triggerAIEvaluation(cgmDataPayload)` is called.
-4.  **Client-side AJAX request:**
-    a.  `client.triggerAIEvaluation` sets the UI to a "Loading AI evaluation..." state.
-    b.  It sends the `cgmDataPayload` as a JSON body in a `POST` request to `/api/v1/ai_eval`.
-5.  **Server-side `/api/v1/ai_eval` endpoint:**
-    a.  Retrieves `AI_LLM_KEY`, `AI_LLM_API_URL`, `AI_LLM_MODEL`, `AI_LLM_DEBUG` from `req.settings`.
-    b.  Fetches `system_prompt` and `user_prompt_template` from the `ai_prompt_settings` MongoDB collection.
+**(Note: The following describes the data flow up to the point of constructing the request payload on the client-side for debugging. The actual sending of this payload to the LLM is not yet implemented in this phase.)**
+
+1.  **User clicks "Show" for the "AI Evaluation" report in the Reports section.**
+    a.  Nightscout calls the `report(datastorage, sorteddaystoshow, options)` function within `lib/report_plugins/ai_eval.js`.
+    b.  This function stores the provided `datastorage`, `sorteddaystoshow`, and `options` onto `window.tempAiEvalReportData`.
+2.  **The AI Evaluation tab HTML is rendered, and its embedded script runs.**
+    a.  The `initializeAiEvalTab(passedInClient)` function is executed.
+    b.  It retrieves the data from `window.tempAiEvalReportData` (if available).
+    c.  It performs AJAX calls to `GET /api/v1/ai_settings/prompts` to fetch system and user prompt templates.
+    d.  The UI in `#ai-eval-status-text` is updated with settings and prompt statuses.
+3.  **Client-Side AI Request Payload Construction (for Debugging):**
+    a.  If report data was loaded and prompts were successfully fetched:
+    i.  A complete JSON payload for the LLM API is constructed. This includes:
+    *   `model`: From `passedInClient.settings.ai_llm_model`.
+    *   `messages`: An array containing the system prompt and the user prompt.
+    *   The user prompt has its `{{CGMDATA}}` token replaced with a JSON string derived from `reportData.datastorage` (containing entries, treatments, profile data, etc.).
+    *   `temperature`: Hardcoded to `0.7`.
+    *   `max_tokens`: Hardcoded to `2000`.
+    ii. If `passedInClient.settings.ai_llm_debug` is `true`, this entire constructed payload is stringified and displayed in the `#aiEvalDebugArea`.
+    b.  The `window.tempAiEvalReportData` is deleted.
+4.  **(Future Step) Client-side AJAX request to trigger actual LLM evaluation:**
+    a.  A user action (e.g., clicking a "Generate Evaluation" button - to be added) would trigger sending the constructed payload.
+    b.  This would make a `POST` request to `/api/v1/ai_eval` with the payload.
+5.  **(Future Step) Server-side `/api/v1/ai_eval` endpoint processing:**
+    a.  Receives the payload.
+    b.  Retrieves `AI_LLM_KEY`, `AI_LLM_API_URL` from `req.settings`.
+    c.  (It might re-verify/fetch prompts from DB or trust client's system/user prompts if payload structure changes).
     c.  If the prompts from the database are empty or not found, the server applies new hardcoded default prompts:
     *   Default System Prompt: `"You are an expert for diabetes and analyzing cgm data from nightscout"`
     *   Default User Prompt Template: `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
     *   The `AI_LLM_PROMPT` environment variable is no longer used for prompts.
-    d.  The received `cgmDataPayload` (from the request body) is stringified and injected into the `{{CGMDATA}}` token of the effective user prompt template (custom or default).
-    e.  Constructs the final LLM payload (model, effective system prompt, final user message with injected data).
-    f.  Makes a POST request to the configured `AI_LLM_API_URL` with the LLM payload and `AI_LLM_KEY`.
-    g.  Receives the LLM's response.
-    h.  If the LLM call is successful and token information (e.g., `response.data.usage.total_tokens` for OpenAI) is available, it makes an internal POST request to `/api/v1/ai_usage/record` with the `total_tokens`.
-    h.  Constructs a JSON response for the client. This response includes:
+        d.  The received `cgmDataPayload` (from the request body) is stringified and injected into the `{{CGMDATA}}` token of the effective user prompt template (custom or default).
+        e.  Constructs the final LLM payload (model, effective system prompt, final user message with injected data).
+        f.  Makes a POST request to the configured `AI_LLM_API_URL` with the LLM payload and `AI_LLM_KEY`.
+        g.  Receives the LLM's response.
+        h.  If the LLM call is successful and token information (e.g., `response.data.usage.total_tokens` for OpenAI) is available, it makes an internal POST request to `/api/v1/ai_usage/record` with the `total_tokens`.
+        h.  Constructs a JSON response for the client. This response includes:
     *   `html_content`: The LLM's answer.
     *   `tokens_used`: The number of tokens consumed for this specific request.
     *   `debug_info` (if `AI_LLM_DEBUG` is true): An object containing `model`, `system_prompt`, and `final_user_prompt`.
