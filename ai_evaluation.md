@@ -100,10 +100,10 @@ A new section in Admin Tools allows you to monitor LLM usage:
 *   **AI Evaluation:** The main content area will show the direct response from the LLM, based on your prompts and data. This may include text, lists, and potentially tables.
 *   **Token Usage:** Information about the number of tokens used for the current evaluation will be displayed (e.g., "Tokens used for this evaluation: XXXX"). This can help you monitor usage.
 *   **Debug Information (If Enabled):** If `AI_LLM_DEBUG` is set to `true` (see Configuration section):
-    *   A dedicated debug area (labeled "AI PROMPT PAYLOAD (DEBUG):") will appear in the AI Evaluation tab.
-    *   **Currently, this area shows the complete JSON payload that *would be sent* to the LLM.** This includes the model, system prompt, the user prompt with `{{CGMDATA}}` replaced by your actual report data, and default values for temperature and max_tokens.
-    *   This is extremely useful for verifying that the data is being captured and formatted correctly before the actual LLM call is implemented.
-    *   *(Once LLM calls are active, this section will likely show the information sent and any direct debug output from the server for that specific call).*
+    *   Two dedicated debug areas will appear in the AI Evaluation tab:
+        *   **"AI PROMPT PAYLOAD (DEBUG):"** This area shows the complete JSON payload that *would be sent* to the LLM. This includes the model, system prompt, the user prompt with `{{CGMDATA}}` and `{{PROFILE}}` replaced by your actual report data, and configured values for temperature and max_tokens. This is useful for verifying data capture and formatting.
+        *   **"AI Response Debug Area:"** This area is initially empty and will be used to display the raw response from the LLM once the API call is implemented.
+    *   A new button labeled **"Send to AI"** is present. Currently, clicking it only changes its text to "Sent!" and logs to the console; it does not yet trigger an API call. This button will be used to initiate the LLM interaction in a future update.
 
 ### 4. Troubleshooting
 
@@ -136,7 +136,9 @@ A new section in Admin Tools allows you to monitor LLM usage:
     *   Defines the "AI Evaluation" report tab.
     *   Its `html: function(client)` method generates the static HTML structure for the tab, including:
         *   `#ai-eval-status-text`: For displaying settings status.
+        *   `#sendToAiButton`: A button to (eventually) trigger the AI API call.
         *   `#aiEvalDebugArea`: A pre-formatted area to show the constructed AI request payload when `AI_LLM_DEBUG` is true.
+        *   `#aiEvalResponseDebugArea`: A pre-formatted area to (eventually) show the raw AI response when `AI_LLM_DEBUG` is true.
         *   Placeholders for results (future).
     *   **Crucially, all client-side JavaScript logic for the tab is now embedded within a `<script>` tag generated inside the `html()` method's output.** This embedded script runs when the tab is activated.
     *   The plugin's `report: function(datastorage, sorteddaystoshow, options)` method:
@@ -260,8 +262,8 @@ A new section in Admin Tools allows you to monitor LLM usage:
     *   The user prompt has its `{{PROFILE}}` token replaced with a JSON string of the active profile data from `reportData.datastorage`.
     *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (defaults to 0.7 if not set).
     *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (defaults to 200 if not set).
-    ii. If `passedInClient.settings.ai_llm_debug` is `true`, this entire constructed payload is stringified and displayed in the `#aiEvalDebugArea`.
-    b.  `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient` are deleted.
+        ii. If `passedInClient.settings.ai_llm_debug` is `true`, this entire constructed payload is stringified and displayed in the `#aiEvalDebugArea`.
+        b.  `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient` are deleted.
 4.  **(Future Step) Client-side AJAX request to trigger actual LLM evaluation:**
     a.  A user action (e.g., clicking a "Generate Evaluation" button - to be added) would trigger sending the constructed payload.
     b.  This would make a `POST` request to `/api/v1/ai_eval` with the payload.
