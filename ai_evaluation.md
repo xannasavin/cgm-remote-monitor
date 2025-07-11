@@ -36,6 +36,14 @@ The following environment variables must be set on your Nightscout server. After
 *   `AI_LLM_MODEL` (Required)
     *   **Description:** The specific model name for the LLM. If not set, the server may use its own default (e.g., `gpt-4o`), but explicitly setting this is recommended to ensure desired behavior.
     *   *Examples:* `gpt-4o`, `gpt-4-turbo`, `claude-3-opus-20240229` (ensure compatibility with your API key/URL).
+*   `AI_LLM_TEMPERATURE` (Optional)
+    *   **Description:** Controls the randomness of the LLM's output. Higher values (e.g., 0.8) make the output more random, while lower values (e.g., 0.2) make it more deterministic.
+    *   *Default:* `0.7`
+    *   *Example:* `0.5`
+*   `AI_LLM_MAX_TOKENS` (Optional)
+    *   **Description:** The maximum number of tokens to generate in the LLM's response.
+    *   *Default:* `200`
+    *   *Example:* `500`
 *   `AI_LLM_DEBUG` (Optional)
     *   **Description:** Set to `true` to enable debugging output on the AI Evaluation report tab.
     *   *Default:* `false` (If the variable is not set, it defaults to false).
@@ -51,13 +59,14 @@ For more flexible and persistent prompt management:
     *   **System Prompt:** Define the LLM's role and general instructions.
         *   *Example:* `You are an expert diabetes educator and data analyst. Your goal is to help the user understand their glucose patterns from the provided CGM data.`
     *   **User Prompt Template:** This is the main instruction for the LLM.
-        *   **Important:** You **must** include the token `{{CGMDATA}}` exactly as written. This token will be replaced by the actual JSON data from the selected report period.
-        *   *Example:* `Please analyze the following CGM data: {{CGMDATA}}. Focus on identifying periods of high variability, potential causes for hypoglycemia, and effectiveness of carbohydrate corrections. Provide actionable advice in bullet points.`
+        *   **Important:** You **must** include the token `{{CGMDATA}}` exactly as written. This token will be replaced by the actual JSON data (entries, treatments, device status, etc.) from the selected report period.
+        *   You can also use the `{{PROFILE}}` token, which will be replaced with the JSON data of the active Nightscout profile (basal rates, ISF, carb ratios, targets, etc.) for the report period.
+        *   *Example:* `Please analyze the following CGM data: {{CGMDATA}}. The user's active profile settings are: {{PROFILE}}. Focus on identifying periods of high variability, potential causes for hypoglycemia, and effectiveness of carbohydrate corrections. Provide actionable advice in bullet points.`
 4.  Click the **"Save Prompts"** button (this is the default button for the admin section, usually labeled "Configure AI Prompts" or similar based on the action's `buttonLabel` which is "Save Prompts" in the plugin's definition).
     *   These prompts are stored in the Nightscout database and will be used for all AI evaluations.
     *   **Important:** If you leave the "System Prompt" or "User Prompt Template" fields empty in the Admin UI (or if they haven't been configured yet), the server will automatically use built-in default prompts for the AI evaluation.
         *   **Default System Prompt:** `"You are an expert for diabetes and analyzing cgm data from nightscout"`
-        *   **Default User Prompt Template:** `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
+        *   **Default User Prompt Template (internal, if not set by user):** `"Analyze the provided glucose data: {{CGMDATA}} using this profile: {{PROFILE}}. Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
     *   It is recommended to review and customize these prompts in the Admin UI to best suit your analytical needs.
 
 #### c. Viewing AI Usage Statistics (Admin Tools)
@@ -132,18 +141,26 @@ A new section in Admin Tools allows you to monitor LLM usage:
     *   **Crucially, all client-side JavaScript logic for the tab is now embedded within a `<script>` tag generated inside the `html()` method's output.** This embedded script runs when the tab is activated.
     *   The plugin's `report: function(datastorage, sorteddaystoshow, options)` method:
         *   Is called when the "Show" button for the AI Evaluation report is clicked.
-        *   It stores `datastorage`, `options`, and `sorteddaystoshow` onto a temporary global variable `window.tempAiEvalReportData`. This makes the data accessible to the client-side script that runs shortly after.
-    *   **Embedded Script Functionality (`initializeAiEvalTab` function):**
-        *   Is called when the tab is activated. It receives the `passedInClient` object.
-        *   Retrieves `reportData` from `window.tempAiEvalReportData` (if set by the `report` function).
-        *   Displays the status of various settings (Model, API Key info).
-        *   Fetches System and User prompt templates from `/api/v1/ai_settings/prompts` via AJAX and updates their status display.
+        *   It stores `datastorage`, `options`, and `sorteddaystoshow` onto `window.tempAiEvalReportData`.
+        *   It then calls `window.processAiEvaluationData()` (via `setTimeout`) to trigger data processing.
+    *   **`initializeAiEvalTab(passedInClient)` function (called by embedded script):**
+        *   Sets up initial UI elements (static settings display, "Waiting for data..." messages).
+        *   Stores `passedInClient` on `window.tempAiEvalPassedInClient` for later use.
+    *   **`processAiEvaluationData()` function (called by `report` function):**
+        *   Retrieves `passedInClient` from `window.tempAiEvalPassedInClient` and `reportData` from `window.tempAiEvalReportData`.
+        *   Fetches System and User prompt templates from `/api/v1/ai_settings/prompts` via AJAX.
+        *   Updates prompt status display on the UI.
         *   **If `reportData` is available and prompts are fetched:**
             *   It constructs the full AI request payload.
-            *   The `{{CGMDATA}}` placeholder in the user prompt template is replaced with a JSON string containing relevant parts of `reportData.datastorage` (e.g., entries, treatments, profile).
-            *   The payload includes the model from settings, the system prompt, the modified user prompt, and **hardcoded defaults for `temperature` (0.7) and `max_tokens` (2000)** as these are not yet configurable via Nightscout settings.
-            *   If `passedInClient.settings.ai_llm_debug` is `true`, this constructed payload is `JSON.stringify`-ed and displayed in the `#aiEvalDebugArea`.
-        *   Cleans up `window.tempAiEvalReportData` after processing.
+            *   The `{{CGMDATA}}` placeholder in the user prompt template is replaced with a JSON string of relevant CGM data.
+            *   The `{{PROFILE}}` placeholder is replaced with a JSON string of the active profile data (extracted from `reportData.datastorage`).
+            *   The payload includes:
+                *   `model`: From `passedInClient.settings.ai_llm_model`.
+                *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (default 0.7).
+                *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (default 200).
+                *   System and User messages.
+            *   If `passedInClient.settings.ai_llm_debug` is `true`, this constructed payload is displayed in the `#aiEvalDebugArea`.
+        *   Cleans up `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient`.
         *   **(Current Stage):** The script currently *only* constructs and displays this payload for debugging. It does *not* yet send it to the `/api/v1/ai_eval` endpoint.
 *   **`lib/admin_plugins/ai_settings.js`:**
     *   New admin plugin for the UI in Admin Tools to manage AI prompts.
@@ -239,11 +256,12 @@ A new section in Admin Tools allows you to monitor LLM usage:
     i.  A complete JSON payload for the LLM API is constructed. This includes:
     *   `model`: From `passedInClient.settings.ai_llm_model`.
     *   `messages`: An array containing the system prompt and the user prompt.
-    *   The user prompt has its `{{CGMDATA}}` token replaced with a JSON string derived from `reportData.datastorage` (containing entries, treatments, profile data, etc.).
-    *   `temperature`: Hardcoded to `0.7`.
-    *   `max_tokens`: Hardcoded to `2000`.
+    *   The user prompt has its `{{CGMDATA}}` token replaced with a JSON string derived from `reportData.datastorage` (containing entries, treatments, device status, etc.).
+    *   The user prompt has its `{{PROFILE}}` token replaced with a JSON string of the active profile data from `reportData.datastorage`.
+    *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (defaults to 0.7 if not set).
+    *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (defaults to 200 if not set).
     ii. If `passedInClient.settings.ai_llm_debug` is `true`, this entire constructed payload is stringified and displayed in the `#aiEvalDebugArea`.
-    b.  The `window.tempAiEvalReportData` is deleted.
+    b.  `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient` are deleted.
 4.  **(Future Step) Client-side AJAX request to trigger actual LLM evaluation:**
     a.  A user action (e.g., clicking a "Generate Evaluation" button - to be added) would trigger sending the constructed payload.
     b.  This would make a `POST` request to `/api/v1/ai_eval` with the payload.
