@@ -101,9 +101,18 @@ A new section in Admin Tools allows you to monitor LLM usage:
 *   **Token Usage:** Information about the number of tokens used for the current evaluation will be displayed (e.g., "Tokens used for this evaluation: XXXX"). This can help you monitor usage.
 *   **Debug Information (If Enabled):** If `AI_LLM_DEBUG` is set to `true` (see Configuration section):
     *   Two dedicated debug areas will appear in the AI Evaluation tab:
-        *   **"AI PROMPT PAYLOAD (DEBUG):"** This area shows the complete JSON payload that *would be sent* to the LLM. This includes the model, system prompt, the user prompt with `{{CGMDATA}}` and `{{PROFILE}}` replaced by your actual report data, and configured values for temperature and max_tokens. This is useful for verifying data capture and formatting.
-        *   **"AI Response Debug Area:"** This area is initially empty and will be used to display the raw response from the LLM once the API call is implemented.
-    *   A new button labeled **"Send to AI"** is present. Currently, clicking it only changes its text to "Sent!" and logs to the console; it does not yet trigger an API call. This button will be used to initiate the LLM interaction in a future update.
+        *   **"AI PROMPT PAYLOAD (DEBUG):"** This area shows the complete JSON payload that is constructed by the client-side script. This payload (containing model, messages with injected data, temperature, and max_tokens) is what will be sent to Nightscout's `/api/v1/ai_eval` backend endpoint when the "Send to AI" button is clicked.
+        *   **"AI Response Debug Area:"** This area is used to display information related to the AI call.
+            *   When the "Send to AI" button is clicked, if `AI_LLM_DEBUG` is true, this area will initially show "Calling API...".
+            *   If the call to `/api/v1/ai_eval` is successful and `AI_LLM_DEBUG` is true, this area will display the full, raw JSON response received from the Nightscout server (which includes the LLM's processed output, token counts, and potentially other debug information from the server).
+            *   If the API call fails (e.g., network error, server error), this area will display the error message, regardless of the `AI_LLM_DEBUG` setting, to help with troubleshooting.
+    *   A button labeled **"Send to AI"** is present.
+        *   **Functionality:** After report data has been loaded and processed (which populates the "AI PROMPT PAYLOAD (DEBUG)" area if debug mode is on), clicking this button will:
+            1.  Take the internally constructed payload.
+            2.  Make a `POST` request to Nightscout's own backend endpoint: `/api/v1/ai_eval`.
+            3.  The button will display "Sending..." and become disabled during the API call.
+            4.  Upon completion (success or failure), the button will re-enable and revert its text to "Send to AI".
+        *   The actual call to the external LLM (e.g., OpenAI) is made by the Nightscout server using the secure `AI_LLM_KEY` environment variable. The client-side script does not handle this key directly.
 
 ### 4. Troubleshooting
 
@@ -263,13 +272,14 @@ A new section in Admin Tools allows you to monitor LLM usage:
     *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (defaults to 0.7 if not set).
     *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (defaults to 200 if not set).
         ii. If `passedInClient.settings.ai_llm_debug` is `true`, this entire constructed payload is stringified and displayed in the `#aiEvalDebugArea`.
-        b.  `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient` are deleted.
-4.  **(Future Step) Client-side AJAX request to trigger actual LLM evaluation:**
-    a.  A user action (e.g., clicking a "Generate Evaluation" button - to be added) would trigger sending the constructed payload.
-    b.  This would make a `POST` request to `/api/v1/ai_eval` with the payload.
-5.  **(Future Step) Server-side `/api/v1/ai_eval` endpoint processing:**
-    a.  Receives the payload.
-    b.  Retrieves `AI_LLM_KEY`, `AI_LLM_API_URL` from `req.settings`.
+        b.  `window.tempAiEvalReportData` is deleted. `window.currentAiEvalPayload` is now set, and `passedInClient` (from `initializeAiEvalTab`'s scope) holds necessary client settings for the API call.
+4.  **Client-side initiates AI Evaluation via `/api/v1/ai_eval`:**
+    a.  User clicks the "Send to AI" button.
+    b.  The client-side script retrieves the `currentAiEvalPayload` (constructed in step 3.a.i).
+    c.  It makes a `POST` request using `fetch` to the Nightscout backend endpoint `/api/v1/ai_eval`. The body of this request is the `currentAiEvalPayload` (JSON stringified).
+5.  **Server-side `/api/v1/ai_eval` endpoint processing:**
+    a.  Receives the payload from the client (which includes `model`, `messages` array, `temperature`, `max_tokens`).
+    b.  Retrieves `AI_LLM_KEY`, `AI_LLM_API_URL` from server settings (`req.settings`).
     c.  (It might re-verify/fetch prompts from DB or trust client's system/user prompts if payload structure changes).
     c.  If the prompts from the database are empty or not found, the server applies new hardcoded default prompts:
     *   Default System Prompt: `"You are an expert for diabetes and analyzing cgm data from nightscout"`
