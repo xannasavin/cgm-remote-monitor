@@ -106,10 +106,9 @@ A new section in Admin Tools allows you to monitor LLM usage:
             *   When the "Send to AI" button is clicked, if `AI_LLM_DEBUG` is true, this area will initially show "Calling API...".
             *   If the call to `/api/v1/ai_eval` is successful and `AI_LLM_DEBUG` is true, this area will display the full, raw JSON response received from the Nightscout server (which includes the LLM's processed output, token counts, and potentially other debug information from the server).
             *   If the API call fails (e.g., network error, server error), this area will display the error message, regardless of the `AI_LLM_DEBUG` setting, to help with troubleshooting.
-    *   Above the "Send to AI" button, a warning message: "Warning: Submit a maximum of 2 weeks of data for analysis to ensure optimal performance and accuracy." is displayed.
     *   A button labeled **"Send to AI"** is present.
         *   **Functionality:** After report data has been loaded and processed (which populates the "AI PROMPT PAYLOAD (DEBUG)" area if debug mode is on), clicking this button will:
-            1.  Take the internally constructed payload. Note that the CGM `entries` data within this payload is specially formatted: fields are filtered (to `date` and `sgv`), dates are converted to Unix timestamps (seconds), SGV values are averaged into 15-minute intervals, and the resulting entries are presented in JSON Lines format. This is a temporary measure to reduce payload size and may be refined.
+            1.  Take the internally constructed payload.
             2.  Make a `POST` request to Nightscout's own backend endpoint: `/api/v1/ai_eval`.
             3.  The button will display "Sending..." and become disabled during the API call.
             4.  Upon completion (success or failure), the button will re-enable and revert its text to "Send to AI".
