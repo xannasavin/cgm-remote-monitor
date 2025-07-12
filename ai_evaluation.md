@@ -311,3 +311,8 @@ A new section in Admin Tools allows you to monitor LLM usage:
 ---
 This markdown file should provide a comprehensive overview for both users and developers.
 Please let me know if you'd like any sections expanded or clarified!
+
+
+Reverted Commits:
+https://github.com/xannasavin/cgm-remote-monitor/commit/74d55b2b0b8e7545e218c6e21bb64e061f29b5dc
+https://github.com/xannasavin/cgm-remote-monitor/commit/d1a8cca9eb80d86afec2f51c56166fae06817258
