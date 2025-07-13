@@ -168,7 +168,7 @@ A new section in Admin Tools allows you to monitor LLM usage:
             *   The payload includes:
                 *   `model`: From `passedInClient.settings.ai_llm_model`.
                 *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (default 0.7).
-                *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (default 200).
+                *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (default 2000).
                 *   System and User messages.
             *   If `passedInClient.settings.ai_llm_debug` is `true`, this constructed payload is displayed in the `#aiEvalDebugArea`.
         *   Cleans up `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient`.
