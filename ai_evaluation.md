@@ -56,9 +56,11 @@ For more flexible and persistent prompt management:
 1.  Navigate to **Admin Tools** in your Nightscout site (usually accessible via `/admin` if you have admin rights).
 2.  Locate the section titled **"AI Evaluation Prompt Settings"**. (If this section is not visible, ensure your Nightscout server has been restarted after the plugin was deployed/updated, and try a hard refresh of your browser on the admin page.)
 3.  Configure the following:
-    *   **System Prompt:** Define the LLM's role and general instructions.
+    *   **System Interim Prompt:** Defines the LLM's role for individual day analysis.
+    *   **User Interim Prompt Template:** The instruction for analyzing a single day's data. Must include `{{CGMDATA}}`.
+    *   **System Prompt:** Define the LLM's role and general instructions for the final summary.
         *   *Example:* `You are an expert diabetes educator and data analyst. Your goal is to help the user understand their glucose patterns from the provided CGM data.`
-    *   **User Prompt Template:** This is the main instruction for the LLM.
+    *   **User Prompt Template:** This is the main instruction for the LLM's final summary.
         *   **Important:** You **must** include the token `{{CGMDATA}}` exactly as written. This token will be replaced by the actual JSON data (entries, treatments, device status, etc.) from the selected report period.
         *   You can also use the `{{PROFILE}}` token, which will be replaced with the JSON data of the active Nightscout profile (basal rates, ISF, carb ratios, targets, etc.) for the report period.
         *   *Example:* `Please analyze the following CGM data: {{CGMDATA}}. The user's active profile settings are: {{PROFILE}}. Focus on identifying periods of high variability, potential causes for hypoglycemia, and effectiveness of carbohydrate corrections. Provide actionable advice in bullet points.`
@@ -100,7 +102,9 @@ A new section in Admin Tools allows you to monitor LLM usage:
 *   **AI Evaluation:** The main content area will show the direct response from the LLM, based on your prompts and data. This may include text, lists, and potentially tables.
 *   **Token Usage:** Information about the number of tokens used for the current evaluation will be displayed (e.g., "Tokens used for this evaluation: XXXX"). This can help you monitor usage.
 *   **Debug Information (If Enabled):** If `AI_LLM_DEBUG` is set to `true` (see Configuration section):
-    *   Two dedicated debug areas will appear in the AI Evaluation tab:
+    *   Four dedicated debug areas will appear in the AI Evaluation tab:
+        *   **"AI INTERIM PROMPT PAYLOAD (DEBUG):"** This area shows the JSON payload for the interim calls.
+        *   **"AI INTERIM Response Debug Area:"** This area is used to display information related to the interim AI calls.
         *   **"AI PROMPT PAYLOAD (DEBUG):"** This area shows the complete JSON payload that is constructed by the client-side script. This payload (containing model, messages with injected data, temperature, and max_tokens) is what will be sent to Nightscout's `/api/v1/ai_eval` backend endpoint when the "Send to AI" button is clicked.
         *   **"AI Response Debug Area:"** This area is used to display information related to the AI call.
             *   When the "Send to AI" button is clicked, if `AI_LLM_DEBUG` is true, this area will initially show "Calling API...".
