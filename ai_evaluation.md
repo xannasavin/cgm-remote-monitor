@@ -61,9 +61,9 @@ For more flexible and persistent prompt management:
     *   **System Prompt:** Define the LLM's role and general instructions for the final summary.
         *   *Example:* `You are an expert diabetes educator and data analyst. Your goal is to help the user understand their glucose patterns from the provided CGM data.`
     *   **User Prompt Template:** This is the main instruction for the LLM's final summary.
-        *   **Important:** You **must** include the token `{{CGMDATA}}` exactly as written. This token will be replaced by the actual JSON data (entries, treatments, device status, etc.) from the selected report period.
+        *   **Important:** You **must** include the token `{{INTERIMAIDATA}}` exactly as written. This token will be replaced by the JSON data from the interim AI calls.
         *   You can also use the `{{PROFILE}}` token, which will be replaced with the JSON data of the active Nightscout profile (basal rates, ISF, carb ratios, targets, etc.) for the report period.
-        *   *Example:* `Please analyze the following CGM data: {{CGMDATA}}. The user's active profile settings are: {{PROFILE}}. Focus on identifying periods of high variability, potential causes for hypoglycemia, and effectiveness of carbohydrate corrections. Provide actionable advice in bullet points.`
+        *   *Example:* `Please analyze the following daily summaries: {{INTERIMAIDATA}}. The user's active profile settings are: {{PROFILE}}. Provide a comprehensive overview of the user's glucose management, highlighting trends, patterns, and areas for improvement.`
 4.  Click the **"Save Prompts"** button (this is the default button for the admin section, usually labeled "Configure AI Prompts" or similar based on the action's `buttonLabel` which is "Save Prompts" in the plugin's definition).
     *   These prompts are stored in the Nightscout database and will be used for all AI evaluations.
     *   **Important:** If you leave the "System Prompt" or "User Prompt Template" fields empty in the Admin UI (or if they haven't been configured yet), the server will automatically use built-in default prompts for the AI evaluation.
@@ -167,9 +167,11 @@ A new section in Admin Tools allows you to monitor LLM usage:
         *   Updates prompt status display on the UI.
         *   **If `reportData` is available and prompts are fetched:**
             *   It constructs the full AI request payload.
-            *   The `{{CGMDATA}}` placeholder in the user prompt template is replaced with a JSON string of relevant CGM data.
+            *   The `{{CGMDATA}}` placeholder in the user prompt template is replaced with a JSON string of relevant CGM data for each day.
             *   The `{{PROFILE}}` placeholder is replaced with a JSON string of the active profile data (extracted from `reportData.datastorage`).
-            *   The payload includes:
+            *   An array of "interim" payloads is created, one for each day in the report.
+            *   The `{{INTERIMAIDATA}}` placeholder in the final user prompt template is replaced with a JSON string of the responses from the interim calls.
+            *   The final payload includes:
                 *   `model`: From `passedInClient.settings.ai_llm_model`.
                 *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (default 0.7).
                 *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (default 2000).
