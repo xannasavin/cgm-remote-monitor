@@ -178,7 +178,17 @@ A new section in Admin Tools allows you to monitor LLM usage:
                 *   System and User messages.
             *   If `passedInClient.settings.ai_llm_debug` is `true`, this constructed payload is displayed in the `#aiEvalDebugArea`.
         *   Cleans up `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient`.
-        *   **(Current Stage):** The script currently *only* constructs and displays this payload for debugging. It does *not* yet send it to the `/api/v1/ai_eval` endpoint.
+*   **`aiResponsesDataObject`:**
+    *   A global object that stores the state of the AI evaluation.
+    *   `merged_by_date`: An object containing the merged interim responses by date.
+    *   `interim_call_tokens`: The total tokens used by the interim calls.
+    *   `interim_calls_amount`: The number of interim calls made.
+    *   `total_tokens_used`: The total tokens used by all calls (interim and final).
+    *   `date_from`: The start date of the evaluation period.
+    *   `date_till`: The end date of the evaluation period.
+    *   `final_response`: The response from the final AI call.
+    *   `total_calls`: The total number of API calls made.
+    *   `final_call`: A flag indicating if the final call has been made.
 *   **`lib/admin_plugins/ai_settings.js`:**
     *   New admin plugin for the UI in Admin Tools to manage AI prompts.
     *   Renders textareas for system and user prompts.
