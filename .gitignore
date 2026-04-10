@@ -34,3 +34,6 @@ npm-debug.log
 # directories created by docker-compose.yml
 mongo-data/
 letsencrypt/
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
