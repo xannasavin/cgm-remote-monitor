@@ -132,9 +132,15 @@ Prompts are stored in MongoDB (`ai_prompt_settings` collection). If no prompts a
 | Placeholder | Description |
 |-------------|-------------|
 | `{{CGMDATA_JSON}}` | Compact JSON of CGM data (SGV readings + treatments per day) |
-| `{{STATS_JSON}}` | Client-computed statistics (TIR, SD, CV, MAGE, episodes) |
-| `{{PROFILE_JSON}}` | Structured Nightscout profile (basal, ISF, carb ratios, targets) |
-| `{{LANGUAGE}}` | Language code from Nightscout LANGUAGE setting |
+| `{{STATS_JSON}}` | Pre-computed statistics (TIR, SD, CV, MAGE, episodes, time-block distributions) |
+| `{{PROFILE_JSON}}` | Structured Nightscout profile (basal rates, I:C ratios, ISF, target ranges) |
+| `{{TREATMENT_SUMMARY}}` | Aggregated carb and insulin totals for the analysis period |
+| `{{LANGUAGE}}` | Language code from Nightscout `LANGUAGE` setting (e.g., `en`, `de`) |
+| `{{DATEFORMAT}}` | Date format string (`dd.mm.yyyy`) |
+| `{{RETURNFORMAT}}` | Full JSON schema the LLM must match for structured output |
+| `{{TIMEFROM}}` | Start date of the analysis range |
+| `{{TIMETILL}}` | End date of the analysis range |
+| `{{DAYS}}` | Number of days in the analysis range |
 
 ## Usage
 
@@ -223,7 +229,7 @@ Set `AI_LLM_MONTHLY_USD_LIMIT` to cap spending. The "Send to AI" button disables
 
 ### No prompts configured
 
-If the Admin UI prompt fields are empty, the "Send to AI" button may not work. Configure prompts in Admin Tools > AI Evaluation Prompt Settings.
+If no custom prompts have been saved in Admin Tools, built-in default prompts are used automatically. To customize, go to Admin Tools > AI Evaluation Prompt Settings. Leave fields empty and save to revert to defaults.
 
 ### Exchange rate issues
 

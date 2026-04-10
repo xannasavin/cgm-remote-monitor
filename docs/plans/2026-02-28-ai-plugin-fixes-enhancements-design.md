@@ -14,7 +14,7 @@ Code review of the AI evaluation plugin found 22 issues (security, quality, arch
 4. **Multi-provider support** -- two adapter paths: OpenAI-compatible (OpenAI + Gemini + any compatible) and Anthropic
 5. **Curated model tiers** -- supported (tested/tailored) vs compatible (works, not optimized)
 6. **Language** follows Nightscout `LANGUAGE` setting
-7. **Prompts** stored in MongoDB only, no hardcoded fallback
+7. **Prompts** stored in MongoDB with built-in defaults as fallback when no custom prompts are configured
 
 **Cost comparison (14-day analysis, estimated):**
 
@@ -226,7 +226,7 @@ Both return normalized: `{ content: string, usage: { prompt_tokens, completion_t
 
 ---
 
-## Phase 4: Documentation Overhaul -- IN PROGRESS
+## Phase 4: Documentation Overhaul + Admin Cleanup -- COMPLETE
 
 ### ai_evaluation.md -- Full Rewrite
 
@@ -239,6 +239,16 @@ New structure:
 6. Troubleshooting -- provider-specific errors, plugin states, debug mode
 7. Technical Reference -- module structure, data flow, API endpoints, schemas, security
 8. Medical Disclaimer
+
+### Admin Settings Cleanup
+
+- Removed legacy interim prompt fields (`system_interim_prompt`, `user_interim_prompt_template`) from admin UI and API
+- Reduced admin UI from 4 textareas to 2 (System Prompt, User Prompt Template)
+- Rewrote DEFAULT_SYSTEM_PROMPT and DEFAULT_USER_PROMPT for optimal single-call LLM results
+- Updated token documentation in admin UI to list all 10 available placeholders
+- Added `treatment_insights` to schema `required` array (aligns schema with prompt instructions)
+- API backward-compatible: old MongoDB fields are silently ignored, not deleted
+- Updated Available Placeholders table in ai_evaluation.md (4 -> 10 tokens)
 
 ### Design Plan -- Updated
 

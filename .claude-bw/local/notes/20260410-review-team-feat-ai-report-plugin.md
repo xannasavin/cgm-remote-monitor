@@ -401,3 +401,74 @@ Remaining OPEN items (non-blocking):
 - R1-3: prefers-reduced-motion (DEFER)
 - R1-4, R2-1: Chart labels + chart tests (DEFER)
 - R1-5, R3-3, R3-4, R4-2: Suggestions (SKIP)
+
+---
+**2026-04-10 — Plan Review: Admin Prompt Cleanup**
+
+# Team Review Report
+**Date:** 2026-04-10
+**Mode:** plan
+**Profile:** default-plan
+**Plan:** C:\Users\thomas\.claude\plans\noble-cooking-horizon.md
+**Status:** Planning
+**Sources:** none
+---
+
+## Plan Review: Remove Legacy Interim Prompts + Rewrite Default Prompts — profile `default-plan`
+
+### Quick Reference
+| Reviewer | Verdict | Critical | Warnings | Suggestions |
+|----------|---------|----------|----------|-------------|
+| R1 — Technical Feasibility | feasible | 0 | 1 | 2 |
+| R2 — Architecture | concerns | 1 | 1 | 1 |
+| R3 — Devil's Advocate | concerns | 0 | 3 | 1 |
+| R4 — Completeness | concerns | 0 | 0 | 3 |
+| R5 — Scope Guard | concerns | 0 | 1 | 1 |
+
+---
+
+### Critical Findings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R2-1 | **treatment_insights prompt/schema mismatch.** The system prompt says "Always include treatment_insights" but `schemas.js:112` does NOT list it in the `required` array. Fix: add `treatment_insights` to required array in schemas.js:112 + update schema test. Plan updated with Step 6. (also R3-3, R5-2) | R2-Architecture, R3-Devil's Advocate, R5-Scope Guard | FIX | DONE — Plan Step 6 added |
+
+### Warnings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R5-3 | **Prompt expansion is a behavioral change.** System prompt grows from ~60 to ~280 tokens (5x). Fix: added verification step 6 — test on staging with real CGM data on at least one cheap model before merging. (also R3-4) | R5-Scope Guard, R3-Devil's Advocate | FIX | DONE — Verification step 6 added |
+| R3-6 | **Custom interim prompts become invisible.** If any user spent time crafting custom `system_interim_prompt` or `user_interim_prompt_template` values in the old admin UI, those prompts remain in MongoDB but are no longer visible or editable. The plan doesn't mention any notification, migration, or documentation about this. | R3-Devil's Advocate | SKIP | OPEN |
+| R2-2 | **Prompt-to-data-processor coupling.** DEFAULT_SYSTEM_PROMPT describes data sections by token name (CGMDATA_JSON, STATS_JSON, etc.). If `data_processor.js` renames tokens in the future, the hardcoded defaults become stale. No mitigation in the plan. Consider adding a code comment linking `ai_settings_api.js` defaults to `data_processor.js:177-188` as the source of truth for token names. | R2-Architecture | DEFER | OPEN |
+| R2-5 | **Data array format not documented in prompt.** Fix: updated DEFAULT_SYSTEM_PROMPT "DATA SECTIONS" to specify exact formats: SGV as `[timestamp_ms, mg_dL]`, treatments as `[timestamp_ms, carbs_g, insulin_u, notes_string]`, profile as `{time, value}` arrays. | R2-Architecture | FIX | DONE — Plan Step 1a updated |
+| R1-2 | **Deployment ordering dependency.** Steps 1 (API) and 2 (admin UI) must ship atomically. If only Step 2 ships (UI sends 2 fields) but Step 1d hasn't updated POST validation, the API rejects with 400. Plan implies sequential ordering but doesn't state the atomicity requirement explicitly. Since both are in the same branch/commit, this is low risk. | R1-Technical Feasibility | SKIP | OPEN |
+
+### Suggestions
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-3 | **No automated tests for prompt API endpoints.** The plan verification section lists "manual check" for GET/POST but there are no existing tests for `/api/v1/ai_settings/prompts`. Consider adding tests: GET returns defaults when no config, GET returns stored config, POST with 2 fields succeeds, POST missing required field returns 400. (also R3-7, R4-8) | R1-Technical Feasibility, R3-Devil's Advocate, R4-Completeness | DEFER | OPEN |
+| R4-7 | **Translation keys for new admin UI strings.** The admin UI uses `client.translate()`. New/changed strings won't have translations. Nightscout falls back to the original English string if no translation exists, so this isn't blocking — but non-English users see English labels for the prompt fields. | R4-Completeness | SKIP | OPEN |
+| R4-9 | **Webpack rebuild question.** The plan modifies `lib/admin_plugins/ai_settings.js`. Admin plugins are loaded dynamically by the admin page (not bundled by webpack), so no rebuild is needed. Verified: admin plugins are registered in `lib/admin_plugins/index.js` and served server-side. | R4-Completeness | SKIP | OPEN |
+| R3-5 | **Dead interim fields persist in MongoDB.** Old documents retain `system_interim_prompt` and `user_interim_prompt_template` forever. Minor tech debt — future developers may wonder what they are. A `$unset` migration could clean them up but is not blocking. | R3-Devil's Advocate | SKIP | OPEN |
+| R5-4 | **Documentation updates scope.** The plan touches `ai_evaluation.md` and the design plan doc. The ai_evaluation.md placeholder table update (4 -> 10 tokens) is directly in scope. The design plan update is minor housekeeping. Both are appropriate for this PR. | R5-Scope Guard | SKIP | OPEN |
+| R2-4 | **{{RETURNFORMAT}} appears in both system and user prompts.** This duplicates ~2KB of schema JSON, costing ~400 extra tokens per call. R2 concludes this is acceptable as "belt and suspenders" reinforcement for JSON compliance — the single-call architecture has no repair fallback, so redundancy is safer. Cost impact: ~$0.001/month. | R2-Architecture | SKIP | OPEN |
+
+### Filtered
+| ID | Details | Flagged By | Evidence |
+|----|---------|-----------|---------|
+| R1-1 | POST validation still requires 4 fields | R1, R3, R4 | [LOW CONFIDENCE — Plan Step 1d explicitly addresses this: "Line 69: Destructure only system_prompt, user_prompt_template. Lines 71-72: Validate only 2 fields"] |
+| R4-2 | Admin UI still shows 4 prompts for single-call architecture | R4 | [LOW CONFIDENCE — Plan Step 2b explicitly addresses this: "Remove interim textareas (lines 44-45, 52-66)"] |
+| R4-3 | Description still references two-phase flow | R4 | [LOW CONFIDENCE — Plan Step 2a explicitly addresses this: "Rewrite description (lines 18-22)"] |
+| R4-1 | Token names in admin UI don't match actual code | R4, R5 | [LOW CONFIDENCE — Plan Steps 2c, 2d, 2e explicitly fix token names] |
+| R4-5 | DATEFORMAT token may be dead code | R4 | [LOW CONFIDENCE — DATEFORMAT is used in DEFAULT_SYSTEM_PROMPT (ai_settings_api.js:9) and replaced in data_processor.js:183. Not dead.] |
+| R3-1 | GET response dropping interim fields is a breaking API change | R3, R5 | [LOW CONFIDENCE — Endpoint is admin-only internal API (`admin:api:ai_settings:edit` permission). No external consumers documented. The admin UI handles missing fields with `|| ''` fallback. Hard drop is appropriate.] |
+
+---
+
+### Recommendation
+**Ready to proceed** (all 3 FIX items DONE, 2 DEFER warnings remain)
+
+Remaining OPEN items (non-blocking):
+- R3-6: Custom interim prompts invisible (SKIP)
+- R2-2: Prompt-to-data-processor coupling (DEFER)
+- R1-2: Deployment ordering (SKIP)
+- R1-3: API endpoint tests (DEFER)
+- All suggestions: SKIP

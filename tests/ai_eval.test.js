@@ -25,9 +25,9 @@ describe('ai_eval plugin', function () {
       schemas.unified_response_format.json_schema.should.have.property('schema');
     });
 
-    it('should require period, summary, trends, recommendations, per_day in schema', function () {
+    it('should require period, summary, trends, recommendations, per_day, treatment_insights in schema', function () {
       var required = schemas.unified_response_format.json_schema.schema.required;
-      required.should.containDeep(['period', 'summary', 'trends', 'recommendations', 'per_day']);
+      required.should.containDeep(['period', 'summary', 'trends', 'recommendations', 'per_day', 'treatment_insights']);
     });
 
     it('should define trends with label, evidence, severity', function () {
@@ -929,9 +929,9 @@ describe('ai_eval plugin', function () {
       ti.properties.should.have.properties('carb_patterns', 'insulin_patterns', 'basal_observations', 'dosing_observations');
     });
 
-    it('should not require treatment_insights (backward compatible)', function () {
+    it('should require treatment_insights in schema', function () {
       var required = schemas.unified_response_format.json_schema.schema.required;
-      required.should.not.containEql('treatment_insights');
+      required.should.containEql('treatment_insights');
     });
   });
 });
