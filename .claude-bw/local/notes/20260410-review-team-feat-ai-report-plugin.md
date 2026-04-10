@@ -219,26 +219,26 @@ Remaining OPEN items (non-blocking, deferred to Phase 3/4):
 ### Suggestions
 | ID | Details | Flagged By | Handling | Status |
 |----|---------|-----------|----------|--------|
-| R3-4 | **Dynamic `require()` in provider factory.** `lib/ai/index.js:35-41` uses if/else with `require()`. Could use a map for safety: `var providers = { anthropic: require(...), openai_compat: require(...) }`. Prevents any future path injection concern. | R3-Advocate | SKIP | OPEN |
-| R2-4 | **Provider detection URL-string based (fragile).** `indexOf('anthropic')` on full URL could false-match on proxy names. Hostname-based detection would be more precise. `lib/ai/index.js:15-20`. | R2-Backend | SKIP | OPEN |
-| R3-5 | **Anthropic adapter concatenates multiple system messages.** Joins with `\n\n` without warning. Could produce contradictory instructions. `anthropic.js:45-51`. | R3-Advocate | SKIP | OPEN |
-| R2-5 | **Anthropic API version hardcoded.** `anthropic-version: '2023-06-01'` at `anthropic.js:86`. Should be configurable or documented for easy update. | R2-Backend | SKIP | OPEN |
-| R3-6 | **Whitelist allows unbounded `max_tokens` from client.** Client can set `max_tokens=100000` causing high cost. No server-side cap. `ai_eval_api.js:21`. | R3-Advocate, R2-Backend | SKIP | OPEN |
-| R1-4 | **`role="alert"` on disclaimer fires on page load.** Permanent disclaimer should use `<aside>` not `role="alert"` which announces immediately to screen readers. `ai_eval.js:366`. | R1-Frontend | SKIP | OPEN |
-| R1-5 | **Spinner invisible to screen readers.** CSS `::before` pseudo-element not exposed to assistive tech. `ai_eval.js:405-407`. | R1-Frontend | SKIP | OPEN |
-| R4-4 | **No pre-click cost estimate.** User can't see estimated cost before clicking "Send to AI". | R4-EndUser | DEFER | OPEN |
-| R3-7 | **No retry logic for transient LLM failures.** Server-side `ai_eval_api.js` immediately returns 502/504 on network errors with no retry. Client-side retry exists but server could help. | R3-Advocate | SKIP | OPEN |
+| R3-4 | **Dynamic `require()` in provider factory.** `lib/ai/index.js:35-41` uses if/else with `require()`. Could use a map for safety. | R3-Advocate | SKIP | OPEN |
+| R2-4 | **Provider detection URL-string based (fragile).** `indexOf('anthropic')` on full URL could false-match on proxy names. | R2-Backend | SKIP | OPEN |
+| R3-5 | **Anthropic adapter concatenates multiple system messages.** Joins with `\n\n` without warning. | R3-Advocate | SKIP | OPEN |
+| R2-5 | **Anthropic API version hardcoded.** `anthropic-version: '2023-06-01'` at `anthropic.js:86`. | R2-Backend | SKIP | OPEN |
+| R3-6 | **Whitelist allows unbounded `max_tokens` from client.** No server-side cap. `ai_eval_api.js:21`. | R3-Advocate, R2-Backend | SKIP | OPEN |
+| R1-4 | **`role="alert"` on disclaimer fires on page load.** Should use `<aside>` not `role="alert"`. | R1-Frontend | SKIP | OPEN |
+| R1-5 | **Spinner invisible to screen readers.** CSS `::before` pseudo-element not exposed to assistive tech. | R1-Frontend | SKIP | OPEN |
+| R4-4 | **No pre-click cost estimate.** | R4-EndUser | DEFER | OPEN |
+| R3-7 | **No retry logic for transient LLM failures.** Server-side returns 502/504 immediately. | R3-Advocate | SKIP | OPEN |
 | R5-1 | **Anthropic system message merging behavior undocumented.** | R5-PM | SKIP | OPEN |
-| R2-6 | **Provider selection only logged in debug mode.** Should log provider name at info level for production troubleshooting. `ai_eval_api.js:85-87`. | R2-Backend | SKIP | OPEN |
-| R1-6 | **Native `confirm()` dialog in admin delete.** Not mobile-friendly, not branded. `ai_usage_viewer.js:295`. | R1-Frontend | DEFER | OPEN |
+| R2-6 | **Provider selection only logged in debug mode.** | R2-Backend | SKIP | OPEN |
+| R1-6 | **Native `confirm()` dialog in admin delete.** Not mobile-friendly. | R1-Frontend | DEFER | OPEN |
 
 ### Filtered
 | ID | Details | Reviewer | Evidence |
 |----|---------|----------|---------|
-| R2-7 | "Race condition in rate limiter" | R2-Backend, R3-Advocate | [LOW CONFIDENCE -- Node.js is single-threaded; event loop guarantees sequential execution within a tick. The check-increment is atomic in practice. Documented as single-user design.] |
-| R3-8 | "Dynamic require() is security risk" | R3-Advocate | [LOW CONFIDENCE -- providerName is derived from env var (server-side only) or URL detection, never from client input. Only two code paths exist.] |
-| R1-7 | "Missing focus indicator on button" | R1-Frontend | [LOW CONFIDENCE -- browser default focus ring applies; no custom outline:none found] |
-| R4-5 | "Admin textarea sizes may truncate" | R4-EndUser | [LOW CONFIDENCE -- textarea scrolls; no data loss occurs] |
+| R2-7 | "Race condition in rate limiter" | R2-Backend, R3-Advocate | [LOW CONFIDENCE -- Node.js single-threaded; atomic in practice] |
+| R3-8 | "Dynamic require() is security risk" | R3-Advocate | [LOW CONFIDENCE -- providerName from env var only, not client input] |
+| R1-7 | "Missing focus indicator on button" | R1-Frontend | [LOW CONFIDENCE -- browser default focus ring applies] |
+| R4-5 | "Admin textarea sizes may truncate" | R4-EndUser | [LOW CONFIDENCE -- textarea scrolls; no data loss] |
 
 ---
 
@@ -249,3 +249,79 @@ Remaining OPEN items (non-blocking, deferred/skipped):
 - R1-1, R1-2, R1-3: Admin table accessibility/contrast/responsive (Phase 4 polish)
 - R4-1, R4-2, R4-3: UX messaging improvements (Phase 4 polish)
 - R3-4 through R3-7, R2-4 through R2-6, R1-4 through R1-6, R4-4, R5-1: Suggestions (skipped/deferred)
+
+---
+**2026-04-10 -- Plan Review (Phase 5: UX Improvements)**
+
+# Team Review Report
+**Date:** 2026-04-10
+**Mode:** plan
+**Plan:** C:\Users\thomas\.claude\plans\compiled-doodling-aurora.md
+**Status:** Active
+**Sources:** none (user requirements from conversation)
+---
+
+## Plan Review: AI Report Plugin UX Improvements (Phase 5)
+
+### Quick Reference
+| Reviewer | Verdict | Critical | Warnings | Suggestions |
+|----------|---------|----------|----------|-------------|
+| Technical Feasibility | concerns | 2 | 4 | 3 |
+| Architecture | sound | 0 | 3 | 4 |
+| Devil's Advocate | concerns | 1 | 4 | 3 |
+| Completeness | gaps | 0 | 3 | 3 |
+| Scope Guardian | ready | 0 | 1 | 2 |
+
+---
+
+### Critical Findings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-1 | **LLM prompt update not in plan.** Plan adds `treatment_insights` to schema and rendering, but never mentions updating system/user prompts to instruct the LLM to return this field. Without prompt changes, LLM will not include treatment_insights and the section will never display. Added Step 3e with prompt update instructions + TREATMENT_SUMMARY placeholder. | R1-Feasibility, R3-Advocate | FIX | DONE |
+| R1-2 | **charts.js require() not specified.** Plan creates `charts.js` but does not mention adding `var charts = require('./ai_eval/charts')` to `ai_eval.js` imports (currently lines 8-11). Without this, webpack will not bundle charts.js and D3 chart code will not load. Added to Step 5a. | R1-Feasibility | FIX | DONE |
+
+---
+
+### Warnings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-3 | **D3 availability guard needed.** Added D3 existence check + "Charts unavailable" fallback text to Step 5a. | R1-Feasibility, R2-Architecture | FIX | DONE |
+| R1-4 | **Chart DOM timing race.** Added `requestAnimationFrame()` wrapper to Step 5b. | R1-Feasibility, R2-Architecture, R5-Scope | FIX | DONE |
+| R1-5 | **Treatment stats edge cases unspecified.** Added edge case specification to Step 1b: null/empty guards, `|| 0` for missing fields, zero-treatment days included in averages. | R1-Feasibility, R2-Architecture, R3-Advocate | FIX | DONE |
+| R2-1 | **DOM reorder changes screen reader order.** Moving aiAnalysisArea before aiStatsArea in DOM changes tab order and screen reader reading order. Analysis section is empty until "Send to AI" is clicked, so keyboard users tab through an empty div. Both divs have aria-live which could cause double announcements. | R1-Feasibility, R2-Architecture | DEFER | OPEN |
+| R3-1 | **Scroll/flash animation sequencing unclear.** Added explicit 4-step sequence to Step 2b: scroll in try block, flash class with setTimeout removal, success flag for finally block button state. | R3-Advocate, R2-Architecture | FIX | DONE |
+| R4-1 | **No new unit tests specified.** Added Step 6 with specific test cases for formatDate, computeTreatmentStats, emptyStats, renderAnalysis with treatment_insights, renderStats with dayDates. | R4-Completeness, R2-Architecture | FIX | DONE |
+| R4-2 | **Basal rate analysis partially missing.** User confirmed: basal insights required. Added `basal_observations` field to schema (Step 1c), 4-column grid in renderer (Step 3b), prompt instructions for basal analysis (Step 3e). | R4-Completeness | FIX | DONE |
+| R5-1 | **renderStats() signature change needs default.** Added `dayDates = dayDates || []` guard and day-index fallback to Step 3a. | R5-Scope, R2-Architecture | FIX | DONE |
+
+---
+
+### Suggestions
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-6 | **DATEFORMAT placeholder may be dead code.** `{{DATEFORMAT}}` is added to replacements but unless prompt templates explicitly reference it, the value goes unused. Either confirm prompts use it, or remove placeholder and add date format instruction directly to system prompt. | R1-Feasibility, R3-Advocate | SKIP | OPEN |
+| R1-7 | **emptyStats() needs treatment fields.** Added to Step 1b: update emptyStats() with treatment field zeros. | R2-Architecture | FIX | DONE |
+| R1-8 | **treatment_insights null check in renderer.** Added to Step 3b: `if (d.treatment_insights)` guard before accessing sub-properties. | R2-Architecture, R3-Advocate | FIX | DONE |
+| R2-2 | **CSS scoping for new classes.** New .ai-trend-card, .ai-flash, .ai-severity-badge classes could conflict with global styles. Scope under `#ai-eval-container .ai-trend-card` to prevent collisions. | R1-Feasibility | SKIP | OPEN |
+| R4-3 | **Chart responsive sizing on mobile.** SVG viewBox handles scaling but no consideration for label density or touch targets on mobile. Diurnal chart labels (24 hours) may overlap on small screens. | R4-Completeness | DEFER | OPEN |
+| R4-4 | **No feature flag for chart rendering.** If D3 charts cause layout issues in production, there is no way to disable them without a code revert. Consider ai_llm_charts setting. | R4-Completeness | SKIP | OPEN |
+
+---
+
+### Filtered
+| ID | Details | Reviewer | Evidence |
+|----|---------|----------|---------|
+| R1-F1 | "D3 version mismatch / will not resolve properly in browser" | R1-Feasibility | [LOW CONFIDENCE -- `(global && global.d3) or require('d3')` is the exact pattern used successfully by daytoday.js:6, calibrations.js:3. D3 v5 is bundled by webpack.] |
+| R1-F2 | "Missing DOM container setup in renderStats()" | R1-Feasibility | [LOW CONFIDENCE -- Plan Step 3a explicitly says "Add container div elements for charts"] |
+| R3-F1 | "Charts.js does not exist / date format not implemented" | R3-Advocate | [LOW CONFIDENCE -- this is a plan review, not code review. Plan describes creating these items.] |
+| R3-F2 | "Treatment data flow incomplete" | R3-Advocate | [LOW CONFIDENCE -- Plan Step 1b explicitly describes wiring treatments into computeDayStats. Data already passed at data_processor.js:84.] |
+
+---
+
+### Recommendation
+**Ready to implement** (all 2 critical + 7 FIX warnings + 2 FIX suggestions resolved)
+
+Remaining OPEN items (non-blocking):
+- R2-1: DOM reorder accessibility (DEFER -- intentional design, low impact for single-user app)
+- R1-6, R2-2, R4-4: Suggestions (SKIP)
+- R4-3: Chart responsive sizing (DEFER)

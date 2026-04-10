@@ -703,4 +703,235 @@ describe('ai_eval plugin', function () {
       });
     });
   });
+
+  describe('formatDate', function () {
+    var renderer = require('../lib/report_plugins/ai_eval/renderer');
+
+    it('should convert YYYY-MM-DD to dd.mm.yyyy', function () {
+      renderer.formatDate('2026-04-10').should.equal('10.04.2026');
+    });
+
+    it('should convert another date correctly', function () {
+      renderer.formatDate('2026-01-05').should.equal('05.01.2026');
+    });
+
+    it('should return empty string for empty input', function () {
+      renderer.formatDate('').should.equal('');
+    });
+
+    it('should return empty string for null', function () {
+      renderer.formatDate(null).should.equal('');
+    });
+
+    it('should return empty string for undefined', function () {
+      renderer.formatDate(undefined).should.equal('');
+    });
+
+    it('should pass through non-matching strings', function () {
+      renderer.formatDate('not-a-date').should.equal('not-a-date');
+    });
+
+    it('should pass through partial dates', function () {
+      renderer.formatDate('2026-04').should.equal('2026-04');
+    });
+  });
+
+  describe('treatment statistics', function () {
+    var statistics = require('../lib/statistics');
+
+    describe('computeDayStats treatment fields', function () {
+      it('should include treatment fields in day stats', function () {
+        var sgv = [
+          { mills: 1000, sgv: 120 }
+          , { mills: 2000, sgv: 130 }
+          , { mills: 3000, sgv: 140 }
+        ];
+        var treatments = [
+          { carbs: 45, insulin: 3.5 }
+          , { carbs: 30, insulin: 0 }
+          , { insulin: 2.0 }
+        ];
+        var result = statistics.computeDayStats(sgv, treatments, { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('total_carbs', 75);
+        result.should.have.property('total_insulin', 5.5);
+        result.should.have.property('bolus_count', 2);
+        result.should.have.property('carb_entries', 2);
+      });
+
+      it('should handle empty treatments', function () {
+        var sgv = [{ mills: 1000, sgv: 120 }];
+        var result = statistics.computeDayStats(sgv, [], { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('total_carbs', 0);
+        result.should.have.property('total_insulin', 0);
+        result.should.have.property('bolus_count', 0);
+        result.should.have.property('carb_entries', 0);
+      });
+
+      it('should handle null treatments', function () {
+        var sgv = [{ mills: 1000, sgv: 120 }];
+        var result = statistics.computeDayStats(sgv, null, { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('total_carbs', 0);
+        result.should.have.property('total_insulin', 0);
+      });
+
+      it('should skip treatments with missing fields', function () {
+        var sgv = [{ mills: 1000, sgv: 120 }];
+        var treatments = [{ carbs: 10 }, {}, null, { insulin: 2 }];
+        var result = statistics.computeDayStats(sgv, treatments, { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('total_carbs', 10);
+        result.should.have.property('total_insulin', 2);
+        result.should.have.property('bolus_count', 1);
+        result.should.have.property('carb_entries', 1);
+      });
+
+      it('should not count zero carbs as carb entry', function () {
+        var sgv = [{ mills: 1000, sgv: 120 }];
+        var treatments = [{ carbs: 0, insulin: 1 }];
+        var result = statistics.computeDayStats(sgv, treatments, { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('carb_entries', 0);
+        result.should.have.property('bolus_count', 1);
+      });
+    });
+
+    describe('computePeriodStats treatment_summary', function () {
+      it('should aggregate treatment summary across days', function () {
+        var dayStats = [
+          { average: 140, median: 135, sd: 28, cv: 20, mage: null
+            , tir_pct: 72, tbr_pct: 5, tar_pct: 23
+            , hypo_episodes: [], hyper_episodes: []
+            , time_blocks: [], total_readings: 288, valid_hours: 22, data_gaps: 1
+            , total_carbs: 120, total_insulin: 25, bolus_count: 5, carb_entries: 4 }
+          , { average: 150, median: 145, sd: 30, cv: 20, mage: null
+            , tir_pct: 65, tbr_pct: 3, tar_pct: 32
+            , hypo_episodes: [], hyper_episodes: []
+            , time_blocks: [], total_readings: 280, valid_hours: 21, data_gaps: 2
+            , total_carbs: 100, total_insulin: 20, bolus_count: 4, carb_entries: 3 }
+        ];
+        var result = statistics.computePeriodStats(dayStats);
+        result.should.have.property('treatment_summary');
+        result.treatment_summary.total_carbs.should.equal(220);
+        result.treatment_summary.total_insulin.should.equal(45);
+        result.treatment_summary.avg_daily_carbs.should.equal(110);
+        result.treatment_summary.avg_daily_insulin.should.equal(22.5);
+        result.treatment_summary.avg_daily_boluses.should.equal(4.5);
+      });
+    });
+
+    describe('emptyStats treatment fields', function () {
+      it('should include treatment fields in empty stats', function () {
+        var sgv = [];
+        var result = statistics.computeDayStats(sgv, [], { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('total_carbs', 0);
+        result.should.have.property('total_insulin', 0);
+        result.should.have.property('bolus_count', 0);
+        result.should.have.property('carb_entries', 0);
+      });
+    });
+  });
+
+  describe('renderAnalysis with treatment_insights', function () {
+    var renderer = require('../lib/report_plugins/ai_eval/renderer');
+
+    it('should render without error when treatment_insights is absent', function () {
+      var analysis = {
+        period: { from: '2026-03-01', to: '2026-03-07', days: 7 }
+        , summary: ['Test']
+        , trends: []
+        , recommendations: { therapy_settings: [], behavioral_timing: [], monitoring: [] }
+        , per_day: []
+      };
+      var html = renderer.renderAnalysis(analysis);
+      html.should.containEql('AI Analysis');
+      html.should.not.containEql('Treatment Insights');
+    });
+
+    it('should render treatment_insights with 4 sections', function () {
+      var analysis = {
+        period: { from: '2026-03-01', to: '2026-03-07', days: 7 }
+        , summary: ['Test']
+        , trends: []
+        , recommendations: { therapy_settings: [], behavioral_timing: [], monitoring: [] }
+        , per_day: []
+        , treatment_insights: {
+          carb_patterns: ['High carb dinners']
+          , insulin_patterns: ['Consistent bolusing']
+          , basal_observations: ['Overnight rate adequate']
+          , dosing_observations: ['Good pre-bolus timing']
+        }
+      };
+      var html = renderer.renderAnalysis(analysis);
+      html.should.containEql('Treatment Insights');
+      html.should.containEql('Carb Patterns');
+      html.should.containEql('Insulin Patterns');
+      html.should.containEql('Basal Observations');
+      html.should.containEql('Dosing Observations');
+      html.should.containEql('High carb dinners');
+      html.should.containEql('Overnight rate adequate');
+    });
+
+    it('should escape XSS in treatment_insights', function () {
+      var analysis = {
+        period: { from: '2026-03-01', to: '2026-03-07', days: 7 }
+        , summary: ['Test']
+        , trends: []
+        , recommendations: { therapy_settings: [], behavioral_timing: [], monitoring: [] }
+        , per_day: []
+        , treatment_insights: {
+          carb_patterns: ['<script>alert(1)</script>']
+          , insulin_patterns: []
+          , basal_observations: []
+          , dosing_observations: []
+        }
+      };
+      var html = renderer.renderAnalysis(analysis);
+      html.should.containEql('&lt;script&gt;alert(1)&lt;/script&gt;');
+      html.should.not.containEql('<script>alert(1)</script>');
+    });
+  });
+
+  describe('renderStats with dayDates', function () {
+    var renderer = require('../lib/report_plugins/ai_eval/renderer');
+
+    it('should format dates as dd.mm.yyyy in heading', function () {
+      var html = renderer.renderStats({}, [], { from: '2026-03-01', to: '2026-03-07' });
+      html.should.containEql('01.03.2026');
+      html.should.containEql('07.03.2026');
+    });
+
+    it('should show formatted dates in daily breakdown when dayDates provided', function () {
+      var dayStats = [
+        { average: 140, sd: 28, cv: 20, mage: 60, tir_pct: 72, tbr_pct: 5, tar_pct: 23
+          , hypo_episodes: [], hyper_episodes: [], total_readings: 288
+          , total_carbs: 80, total_insulin: 20, bolus_count: 4, carb_entries: 3 }
+      ];
+      var html = renderer.renderStats({}, dayStats, {}, ['2026-04-05']);
+      html.should.containEql('05.04.2026');
+    });
+
+    it('should fall back to day index when dayDates not provided', function () {
+      var dayStats = [
+        { average: 140, sd: 28, cv: 20, mage: 60, tir_pct: 72, tbr_pct: 5, tar_pct: 23
+          , hypo_episodes: [], hyper_episodes: [], total_readings: 288
+          , total_carbs: 0, total_insulin: 0, bolus_count: 0, carb_entries: 0 }
+      ];
+      var html = renderer.renderStats({}, dayStats, {});
+      html.should.containEql('>1<');
+    });
+  });
+
+  describe('schemas treatment_insights', function () {
+    var schemas = require('../lib/report_plugins/ai_eval/schemas');
+
+    it('should define treatment_insights with carb_patterns, insulin_patterns, basal_observations, dosing_observations', function () {
+      var props = schemas.unified_response_format.json_schema.schema.properties;
+      props.should.have.property('treatment_insights');
+      var ti = props.treatment_insights;
+      ti.properties.should.have.properties('carb_patterns', 'insulin_patterns', 'basal_observations', 'dosing_observations');
+    });
+
+    it('should not require treatment_insights (backward compatible)', function () {
+      var required = schemas.unified_response_format.json_schema.schema.required;
+      required.should.not.containEql('treatment_insights');
+    });
+  });
 });
