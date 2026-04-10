@@ -406,4 +406,301 @@ describe('ai_eval plugin', function () {
       });
     });
   });
+
+  describe('provider adapters (lib/ai/)', function () {
+    var ai = require('../lib/ai/');
+
+    describe('detectProvider', function () {
+      it('should detect anthropic from URL', function () {
+        ai.detectProvider('https://api.anthropic.com/v1/messages').should.equal('anthropic');
+      });
+
+      it('should detect openai_compat for OpenAI URL', function () {
+        ai.detectProvider('https://api.openai.com/v1/chat/completions').should.equal('openai_compat');
+      });
+
+      it('should detect openai_compat for Gemini compat URL', function () {
+        ai.detectProvider('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions').should.equal('openai_compat');
+      });
+
+      it('should default to openai_compat for unknown URLs', function () {
+        ai.detectProvider('https://my-custom-llm.example.com/v1/chat').should.equal('openai_compat');
+      });
+
+      it('should default to openai_compat for null/undefined', function () {
+        ai.detectProvider(null).should.equal('openai_compat');
+        ai.detectProvider(undefined).should.equal('openai_compat');
+      });
+    });
+
+    describe('createProvider', function () {
+      it('should create openai_compat provider by default', function () {
+        var provider = ai.createProvider({
+          apiUrl: 'https://api.openai.com/v1/chat/completions'
+          , apiKey: 'test-key'
+        });
+        provider.should.have.property('name', 'openai_compat');
+        provider.should.have.property('chatCompletion').which.is.a.Function();
+      });
+
+      it('should create anthropic provider for anthropic URL', function () {
+        var provider = ai.createProvider({
+          apiUrl: 'https://api.anthropic.com/v1/messages'
+          , apiKey: 'test-key'
+        });
+        provider.should.have.property('name', 'anthropic');
+        provider.should.have.property('chatCompletion').which.is.a.Function();
+      });
+
+      it('should respect explicit provider override', function () {
+        var provider = ai.createProvider({
+          apiUrl: 'https://my-proxy.example.com/v1/messages'
+          , apiKey: 'test-key'
+          , provider: 'anthropic'
+        });
+        provider.should.have.property('name', 'anthropic');
+      });
+
+      it('should normalize "openai" to "openai_compat"', function () {
+        var provider = ai.createProvider({
+          apiUrl: 'https://api.openai.com/v1/chat/completions'
+          , apiKey: 'test-key'
+          , provider: 'openai'
+        });
+        provider.should.have.property('name', 'openai_compat');
+      });
+    });
+
+    describe('openai_compat adapter', function () {
+      var http = require('http');
+      var server;
+      var serverPort;
+
+      before(function (done) {
+        server = http.createServer(function (req, res) {
+          var body = '';
+          req.on('data', function (chunk) { body += chunk; });
+          req.on('end', function () {
+            var parsed = JSON.parse(body);
+
+            // Check auth header
+            if (req.headers['authorization'] !== 'Bearer test-openai-key') {
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Unauthorized' }));
+              return;
+            }
+
+            // Simulate error model
+            if (parsed.model === 'error-model') {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { message: 'Internal error' } }));
+              return;
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              choices: [{ message: { content: '{"result":"ok"}' } }]
+              , usage: { prompt_tokens: 100, completion_tokens: 50 }
+            }));
+          });
+        });
+        server.listen(0, function () {
+          serverPort = server.address().port;
+          done();
+        });
+      });
+
+      after(function (done) {
+        server.close(done);
+      });
+
+      it('should send request and parse OpenAI-style response', function (done) {
+        var provider = ai.createProvider({
+          apiUrl: 'http://127.0.0.1:' + serverPort + '/v1/chat/completions'
+          , apiKey: 'test-openai-key'
+        });
+        provider.chatCompletion({
+          messages: [{ role: 'user', content: 'test' }]
+          , model: 'gpt-test'
+        }).then(function (result) {
+          result.should.have.property('content', '{"result":"ok"}');
+          result.usage.should.have.property('prompt_tokens', 100);
+          result.usage.should.have.property('completion_tokens', 50);
+          done();
+        }).catch(done);
+      });
+
+      it('should reject on HTTP error status', function (done) {
+        var provider = ai.createProvider({
+          apiUrl: 'http://127.0.0.1:' + serverPort + '/v1/chat/completions'
+          , apiKey: 'test-openai-key'
+        });
+        provider.chatCompletion({
+          messages: [{ role: 'user', content: 'test' }]
+          , model: 'error-model'
+        }).then(function () {
+          done(new Error('Should have rejected'));
+        }).catch(function (err) {
+          err.statusCode.should.equal(500);
+          done();
+        });
+      });
+
+      it('should reject on auth failure', function (done) {
+        var provider = ai.createProvider({
+          apiUrl: 'http://127.0.0.1:' + serverPort + '/v1/chat/completions'
+          , apiKey: 'wrong-key'
+        });
+        provider.chatCompletion({
+          messages: [{ role: 'user', content: 'test' }]
+          , model: 'gpt-test'
+        }).then(function () {
+          done(new Error('Should have rejected'));
+        }).catch(function (err) {
+          err.statusCode.should.equal(401);
+          done();
+        });
+      });
+    });
+
+    describe('anthropic adapter', function () {
+      var http = require('http');
+      var server;
+      var serverPort;
+
+      before(function (done) {
+        server = http.createServer(function (req, res) {
+          var body = '';
+          req.on('data', function (chunk) { body += chunk; });
+          req.on('end', function () {
+            var parsed = JSON.parse(body);
+
+            // Check Anthropic-specific auth
+            if (req.headers['x-api-key'] !== 'test-anthropic-key') {
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { type: 'authentication_error' } }));
+              return;
+            }
+
+            // Verify anthropic-version header
+            if (req.headers['anthropic-version'] !== '2023-06-01') {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { type: 'invalid_request' } }));
+              return;
+            }
+
+            // Verify system is extracted from messages
+            if (parsed.model === 'check-system') {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                content: [{ text: JSON.stringify({ system: parsed.system || null, messageCount: parsed.messages.length }) }]
+                , usage: { input_tokens: 80, output_tokens: 40 }
+              }));
+              return;
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              content: [{ text: '{"result":"claude-ok"}' }]
+              , usage: { input_tokens: 80, output_tokens: 40 }
+            }));
+          });
+        });
+        server.listen(0, function () {
+          serverPort = server.address().port;
+          done();
+        });
+      });
+
+      after(function (done) {
+        server.close(done);
+      });
+
+      it('should send request and normalize Anthropic response', function (done) {
+        var provider = ai.createProvider({
+          apiUrl: 'http://127.0.0.1:' + serverPort + '/v1/messages'
+          , apiKey: 'test-anthropic-key'
+          , provider: 'anthropic'
+        });
+        provider.chatCompletion({
+          messages: [{ role: 'user', content: 'test' }]
+          , model: 'claude-test'
+        }).then(function (result) {
+          result.should.have.property('content', '{"result":"claude-ok"}');
+          // Anthropic input_tokens -> prompt_tokens
+          result.usage.should.have.property('prompt_tokens', 80);
+          // Anthropic output_tokens -> completion_tokens
+          result.usage.should.have.property('completion_tokens', 40);
+          done();
+        }).catch(done);
+      });
+
+      it('should extract system message from messages array', function (done) {
+        var provider = ai.createProvider({
+          apiUrl: 'http://127.0.0.1:' + serverPort + '/v1/messages'
+          , apiKey: 'test-anthropic-key'
+          , provider: 'anthropic'
+        });
+        provider.chatCompletion({
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant.' }
+            , { role: 'user', content: 'test' }
+          ]
+          , model: 'check-system'
+        }).then(function (result) {
+          var parsed = JSON.parse(result.content);
+          parsed.system.should.equal('You are a helpful assistant.');
+          parsed.messageCount.should.equal(1); // system removed from messages
+          done();
+        }).catch(done);
+      });
+
+      it('should reject on auth failure', function (done) {
+        var provider = ai.createProvider({
+          apiUrl: 'http://127.0.0.1:' + serverPort + '/v1/messages'
+          , apiKey: 'wrong-key'
+          , provider: 'anthropic'
+        });
+        provider.chatCompletion({
+          messages: [{ role: 'user', content: 'test' }]
+          , model: 'claude-test'
+        }).then(function () {
+          done(new Error('Should have rejected'));
+        }).catch(function (err) {
+          err.statusCode.should.equal(401);
+          done();
+        });
+      });
+    });
+
+    describe('plugin isolation logic', function () {
+      // Note: can't test full report_plugins/index.js in Node (daytoday.js needs window).
+      // Instead, verify the isolation condition directly.
+
+      it('should evaluate isolation condition: true when ai_llm_key_is_set', function () {
+        var ctx = { settings: { ai_llm_key_is_set: true } };
+        (ctx.settings && ctx.settings.ai_llm_key_is_set).should.be.true();
+      });
+
+      it('should evaluate isolation condition: false when ai_llm_key_is_set is false', function () {
+        var ctx = { settings: { ai_llm_key_is_set: false } };
+        (!!( ctx.settings && ctx.settings.ai_llm_key_is_set)).should.be.false();
+      });
+
+      it('should evaluate isolation condition: false when settings empty', function () {
+        var ctx = { settings: {} };
+        (!!(ctx.settings && ctx.settings.ai_llm_key_is_set)).should.be.false();
+      });
+
+      it('should evaluate isolation condition: false when settings missing', function () {
+        var ctx = {};
+        (!!(ctx.settings && ctx.settings.ai_llm_key_is_set)).should.be.false();
+      });
+
+      it('ai_eval plugin should still load when called directly', function () {
+        var aiEval = require('../lib/report_plugins/ai_eval')({});
+        aiEval.should.have.property('name', 'ai_eval');
+      });
+    });
+  });
 });

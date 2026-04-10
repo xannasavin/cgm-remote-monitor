@@ -170,3 +170,82 @@ Remaining OPEN items (non-blocking, deferred to Phase 3/4):
 - R2-3: deprecated `request` package (Phase 3 replaces)
 - R4-3: privacy confirmation dialog
 - R1-6, R3-12, R3-14, R4-4, R4-5: UX polish items
+
+---
+**2026-04-10 -- Code Review (Phase 3 implementation)**
+
+# Team Review Report
+**Date:** 2026-04-10
+**Mode:** code
+**Profile:** default-code
+**Branch:** feat/ai-report-plugin
+**Base:** master
+**Files reviewed:** 9 (6 modified + 3 new)
+---
+
+## Team Review: feat/ai-report-plugin (Phase 3 Code) -- profile `default-code`
+
+### Quick Reference
+| Reviewer | Verdict | Critical | Warnings | Suggestions |
+|----------|---------|----------|----------|-------------|
+| Frontend Senior | issues | 1 | 4 | 5 |
+| Backend Senior | issues | 1 | 3 | 4 |
+| Devil's Advocate | issues | 2 | 3 | 5 |
+| End User | concerns | 0 | 3 | 4 |
+| Product Manager | concerns | 0 | 1 | 1 |
+
+---
+
+### Critical Findings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R3-1 | **Missing schema validation in Anthropic adapter.** Added null checks for `json_schema` and `schema` properties before `JSON.stringify`. `anthropic.js:69-70`. | R3-Advocate, R2-Backend | FIX | DONE |
+| R3-2 | **`AI_LLM_TIMEOUT` env var never read.** Added `parseInt(readENV('AI_LLM_TIMEOUT', 120), 10)` to `env.js:64`. | R3-Advocate, R5-PM, R2-Backend | FIX | DONE |
+| R2-1 | **Error details may leak LLM API info to client.** Removed `details: error.message` from client error response. Error logged server-side only. `ai_eval_api.js:112`. | R2-Backend | FIX | DONE |
+
+### Warnings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R2-2 | **No response size limit on adapter buffering.** Added 10MB cap with `MAX_RESPONSE_SIZE` in both adapters. Destroys request on exceed. | R2-Backend, R3-Advocate | FIX | DONE |
+| R2-3 | **No validation of `messages` field structure.** Added `Array.isArray` + non-empty check, returns 400 on invalid. `ai_eval_api.js:58-60`. | R2-Backend, R3-Advocate | FIX | DONE |
+| R3-3 | **Response structure not validated/logged.** Added `console.warn` with truncated JSON when expected response fields missing in both adapters. | R3-Advocate, R2-Backend | FIX | DONE |
+| R1-1 | **Admin usage table color contrast failures.** `ai_usage_viewer.js:174-186`: coral on black (~4.8:1), lightskyblue on black (~5.5:1 marginal). WCAG AA minimum is 4.5:1 for normal text. | R1-Frontend | DEFER | OPEN |
+| R1-2 | **Inline `color: red` for errors across admin views.** Scattered `style="color: red"` in 5+ locations. Not accessible for color-blind users, not maintainable. `ai_usage_viewer.js:159, 218, 264, 291, 314`. | R1-Frontend | DEFER | OPEN |
+| R4-1 | **14-day limit message appears too late.** User selects date range, opens AI tab, then learns the constraint. Should show before/during date selection, not after. | R4-EndUser | DEFER | OPEN |
+| R4-2 | **Monthly spending limit message not actionable.** Non-admin user sees "Monthly limit of $X reached" but no guidance on who to contact or when it resets. | R4-EndUser | DEFER | OPEN |
+| R1-3 | **Admin table not responsive (16+ columns, min-width:80px).** Mobile/tablet requires extensive horizontal scrolling. No @media breakpoints. `ai_usage_viewer.js:30`. | R1-Frontend | DEFER | OPEN |
+| R4-3 | **"Computing statistics..." placeholder misleading.** Text suggests computation is happening but user must click "Send to AI" first. Should say "Ready" or auto-display stats. | R4-EndUser | DEFER | OPEN |
+
+### Suggestions
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R3-4 | **Dynamic `require()` in provider factory.** `lib/ai/index.js:35-41` uses if/else with `require()`. Could use a map for safety: `var providers = { anthropic: require(...), openai_compat: require(...) }`. Prevents any future path injection concern. | R3-Advocate | SKIP | OPEN |
+| R2-4 | **Provider detection URL-string based (fragile).** `indexOf('anthropic')` on full URL could false-match on proxy names. Hostname-based detection would be more precise. `lib/ai/index.js:15-20`. | R2-Backend | SKIP | OPEN |
+| R3-5 | **Anthropic adapter concatenates multiple system messages.** Joins with `\n\n` without warning. Could produce contradictory instructions. `anthropic.js:45-51`. | R3-Advocate | SKIP | OPEN |
+| R2-5 | **Anthropic API version hardcoded.** `anthropic-version: '2023-06-01'` at `anthropic.js:86`. Should be configurable or documented for easy update. | R2-Backend | SKIP | OPEN |
+| R3-6 | **Whitelist allows unbounded `max_tokens` from client.** Client can set `max_tokens=100000` causing high cost. No server-side cap. `ai_eval_api.js:21`. | R3-Advocate, R2-Backend | SKIP | OPEN |
+| R1-4 | **`role="alert"` on disclaimer fires on page load.** Permanent disclaimer should use `<aside>` not `role="alert"` which announces immediately to screen readers. `ai_eval.js:366`. | R1-Frontend | SKIP | OPEN |
+| R1-5 | **Spinner invisible to screen readers.** CSS `::before` pseudo-element not exposed to assistive tech. `ai_eval.js:405-407`. | R1-Frontend | SKIP | OPEN |
+| R4-4 | **No pre-click cost estimate.** User can't see estimated cost before clicking "Send to AI". | R4-EndUser | DEFER | OPEN |
+| R3-7 | **No retry logic for transient LLM failures.** Server-side `ai_eval_api.js` immediately returns 502/504 on network errors with no retry. Client-side retry exists but server could help. | R3-Advocate | SKIP | OPEN |
+| R5-1 | **Anthropic system message merging behavior undocumented.** | R5-PM | SKIP | OPEN |
+| R2-6 | **Provider selection only logged in debug mode.** Should log provider name at info level for production troubleshooting. `ai_eval_api.js:85-87`. | R2-Backend | SKIP | OPEN |
+| R1-6 | **Native `confirm()` dialog in admin delete.** Not mobile-friendly, not branded. `ai_usage_viewer.js:295`. | R1-Frontend | DEFER | OPEN |
+
+### Filtered
+| ID | Details | Reviewer | Evidence |
+|----|---------|----------|---------|
+| R2-7 | "Race condition in rate limiter" | R2-Backend, R3-Advocate | [LOW CONFIDENCE -- Node.js is single-threaded; event loop guarantees sequential execution within a tick. The check-increment is atomic in practice. Documented as single-user design.] |
+| R3-8 | "Dynamic require() is security risk" | R3-Advocate | [LOW CONFIDENCE -- providerName is derived from env var (server-side only) or URL detection, never from client input. Only two code paths exist.] |
+| R1-7 | "Missing focus indicator on button" | R1-Frontend | [LOW CONFIDENCE -- browser default focus ring applies; no custom outline:none found] |
+| R4-5 | "Admin textarea sizes may truncate" | R4-EndUser | [LOW CONFIDENCE -- textarea scrolls; no data loss occurs] |
+
+---
+
+### Recommendation
+**Ready to proceed** (all 3 critical findings resolved, all 3 FIX warnings resolved, 6/6 FIX items DONE)
+
+Remaining OPEN items (non-blocking, deferred/skipped):
+- R1-1, R1-2, R1-3: Admin table accessibility/contrast/responsive (Phase 4 polish)
+- R4-1, R4-2, R4-3: UX messaging improvements (Phase 4 polish)
+- R3-4 through R3-7, R2-4 through R2-6, R1-4 through R1-6, R4-4, R5-1: Suggestions (skipped/deferred)
