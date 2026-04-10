@@ -325,3 +325,79 @@ Remaining OPEN items (non-blocking):
 - R2-1: DOM reorder accessibility (DEFER -- intentional design, low impact for single-user app)
 - R1-6, R2-2, R4-4: Suggestions (SKIP)
 - R4-3: Chart responsive sizing (DEFER)
+
+---
+**2026-04-10 -- Code Review (Phase 5: UX Improvements)**
+
+# Team Review Report
+**Date:** 2026-04-10
+**Mode:** code
+**Branch:** feat/ai-report-plugin
+**Base:** master
+**Files reviewed:** 8 (7 modified + 1 new)
+---
+
+## Team Review: feat/ai-report-plugin (Phase 5 Code)
+
+### Quick Reference
+| Reviewer | Verdict | Critical | Warnings | Suggestions |
+|----------|---------|----------|----------|-------------|
+| Frontend/UX | concerns | 0 | 4 | 5 |
+| Architecture | pass | 0 | 1 | 3 |
+| Devil's Advocate | concerns | 0 | 2 | 5 |
+| End User | concerns | 0 | 3 | 4 |
+| Product Manager | pass | 0 | 1 | 2 |
+
+---
+
+### Critical Findings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| (none) | No critical findings in Phase 5 code. | | | |
+
+---
+
+### Warnings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-1 | **"Report Ready" button state vanishes after 3s.** Button now stays permanently disabled with "Report Ready" text after success. Resets only when user regenerates report data. | R1-Frontend, R4-EndUser | FIX | DONE |
+| R1-2 | **Daily breakdown table now has 13 columns -- overflows on mobile.** No `overflow-x: auto` wrapper. Columns: Date, Avg, SD, CV, MAGE, TIR, TBR, TAR, Carbs, Insulin, Hypo, Hyper, Readings. `renderer.js:126`. | R1-Frontend | DEFER | OPEN |
+| R1-3 | **No `prefers-reduced-motion` support for scroll + flash animation.** `scrollIntoView({ behavior: 'smooth' })` and `.ai-flash` 2s animation may be jarring for motion-sensitive users. `ai_eval.js:128-130`. | R1-Frontend, R4-EndUser | DEFER | OPEN |
+| R3-1 | **Empty period stats return missing `treatment_summary` field.** Added `treatment_summary` with zeros to empty return in `computePeriodStats`. Data shape now consistent. | R3-Advocate, R2-Architecture | FIX | DONE |
+| R4-1 | **Charts render into empty divs with no loading placeholder.** Added "Loading chart..." placeholder text in chart containers. Charts clear placeholder before rendering SVG. | R4-EndUser | FIX | DONE |
+| R5-1 | **LLM prompts must be updated for treatment_insights to work.** Added default prompts in `ai_settings_api.js` that instruct LLM to return treatment_insights, use dd.mm.yyyy dates, and analyze basal profiles. Returned automatically when no custom prompts configured. | R5-PM, R2-Architecture | FIX | DONE |
+
+---
+
+### Suggestions
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-4 | **Chart SVG labels may overlap on mobile.** Diurnal chart renders 24 hourly tick labels (0:00-23:00) at fixed 900px viewBox. On small screens, labels compress and overlap. `charts.js:109-111`. | R1-Frontend, R4-EndUser | DEFER | OPEN |
+| R1-5 | **Treatment summary section hidden when no treatments.** If user has no carbs/insulin logged, section is absent with no explanation. Could show "No treatment data logged" instead. `renderer.js:78-90`. | R4-EndUser | SKIP | OPEN |
+| R3-2 | **`parseFloat` in computeTreatmentStats accepts Infinity.** Changed to `isFinite()` check: `var rawCarbs = parseFloat(t.carbs); var carbs = isFinite(rawCarbs) ? rawCarbs : 0;`. | R3-Advocate | FIX | DONE |
+| R3-3 | **Date format dd.mm.yyyy hardcoded, no locale awareness.** User requested this format explicitly, but it may conflict with date picker format elsewhere in Nightscout. `renderer.js:14-19`, `data_processor.js:183`. | R3-Advocate, R4-EndUser | SKIP | OPEN |
+| R2-1 | **No unit tests for charts.js.** D3 chart rendering functions have no test coverage. Would require jsdom or similar. `charts.js`. | R2-Architecture, R3-Advocate | DEFER | OPEN |
+| R3-4 | **14-day limit constant hardcoded in 3 places.** `data_processor.js:127`, `ai_eval.js:328`, `ai_eval.js:338`. Should be a single constant. | R3-Advocate | SKIP | OPEN |
+| R4-2 | **Trend card color code has no legend.** Colored left borders (red/yellow/blue) have badge text but no explanation of what severity levels mean for glucose management. `renderer.js:160-173`. | R4-EndUser | SKIP | OPEN |
+
+---
+
+### Filtered
+| ID | Details | Reviewer | Evidence |
+|----|---------|----------|---------|
+| R3-F1 | "Division by zero in treatment_summary when validDays empty" | R3-Advocate | [LOW CONFIDENCE -- `computePeriodStats` returns early at line 289-301 when input empty; `validDays.length === 0` triggers recursive call with `[]` which hits the guard. No division by zero possible.] |
+| R3-F2 | "Infinite recursion in computePeriodStats" | R3-Advocate | [LOW CONFIDENCE -- `computePeriodStats([])` hits guard at line 289 (`dayStatsArray.length === 0`) and returns immediately. Max 1 recursive call.] |
+| R3-F3 | "D3 chart DOM duplication on re-render" | R3-Advocate | [LOW CONFIDENCE -- `report()` resets `statsArea.textContent` (line 467), then `processAiEvaluationData` replaces innerHTML (line 330), destroying old containers. New containers created fresh. charts.js null-checks containers.] |
+| R1-F1 | "Monthly limit check race condition" | R1-Frontend, R3-Advocate, R2-Architecture | [LOW CONFIDENCE for Phase 5 scope -- this code (lines 291-309) is pre-existing from Phase 2, not modified in Phase 5. Already reviewed and accepted in prior code review.] |
+| R1-F2 | "Keyboard nav broken in error retry button" | R1-Frontend | [LOW CONFIDENCE for Phase 5 scope -- retry button code (lines 200-210) is pre-existing from Phase 2, not modified in Phase 5.] |
+
+---
+
+### Recommendation
+**Ready to proceed** (0 critical, all 5 FIX items DONE, 2 DEFER warnings remain)
+
+Remaining OPEN items (non-blocking):
+- R1-2: Table overflow on mobile (DEFER)
+- R1-3: prefers-reduced-motion (DEFER)
+- R1-4, R2-1: Chart labels + chart tests (DEFER)
+- R1-5, R3-3, R3-4, R4-2: Suggestions (SKIP)
