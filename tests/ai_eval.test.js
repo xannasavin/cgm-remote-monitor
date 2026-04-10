@@ -123,10 +123,10 @@ describe('ai_eval plugin', function () {
         html.should.containEql('<th scope="col">&lt;script&gt;</th>');
       });
 
-      it('should render row cells as-is (caller escapes)', function () {
+      it('should auto-escape row cell values (F12)', function () {
         var html = renderer.table({
           head: ['Name'],
-          rows: [[renderer.escapeHtml('<b>bold</b>')]]
+          rows: [['<b>bold</b>']]
         });
         html.should.containEql('<td>&lt;b&gt;bold&lt;/b&gt;</td>');
       });

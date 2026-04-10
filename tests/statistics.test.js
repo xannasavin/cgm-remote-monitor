@@ -210,13 +210,13 @@ describe('statistics', function () {
         result.tar_pct.should.be.approximately(16.67, 0.01);
       });
 
-      it('should treat targetLow as exclusive (value == targetLow is in range)', function () {
+      it('should treat both boundaries as inclusive for TIR (70-180 per clinical consensus)', function () {
         var records = makeSgvRecords([70, 180]);
         var result = statistics.computeDayStats(records, [], DEFAULT_OPTIONS);
-        // 70 is >= targetLow (70) and < targetHigh (180) -> in range
-        // 180 is >= targetHigh (180) -> above range
-        result.tir_pct.should.equal(50);
-        result.tar_pct.should.equal(50);
+        // 70 is >= targetLow (70) and <= targetHigh (180) -> in range
+        // 180 is <= targetHigh (180) -> in range (F7: clinical consensus)
+        result.tir_pct.should.equal(100);
+        result.tar_pct.should.equal(0);
         result.tbr_pct.should.equal(0);
       });
     });
