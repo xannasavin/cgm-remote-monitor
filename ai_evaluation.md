@@ -2,555 +2,385 @@
 
 ## Overview
 
-The AI Evaluation plugin enhances Nightscout by adding an "AI Evaluation" tab to the Reports screen. This feature allows users to leverage Large Language Models (LLMs) to analyze their CGM (Continuous Glucose Monitoring) data and associated treatment information. Users can configure prompts to guide the LLM's analysis, focusing on patterns, potential causes for fluctuations, and recommendations for improving glucose stability.
+The AI Evaluation plugin adds an "AI Evaluation" tab to the Nightscout Reports screen. It combines **client-side statistical analysis** with **LLM-powered interpretation** to help users understand their CGM data.
 
-This document serves as both a user manual and technical documentation for the plugin.
+**How it works:**
+
+1. **Client-side statistics** (instant, always available): TIR/TBR/TAR, standard deviation, CV, MAGE, episode counting, and time-block breakdowns are computed locally in the browser using `lib/statistics.js`. These appear immediately when data is loaded.
+2. **LLM analysis** (optional, requires API key): A single API call sends compact CGM data plus computed statistics to an LLM, which returns pattern analysis, trend detection, and therapy recommendations. The LLM focuses on interpretation -- it does not compute statistics.
+
+**Architecture highlights:**
+
+- **Single-call design**: One LLM call per analysis (replaces the previous 14+1 two-phase pattern)
+- **Multi-provider support**: Works with OpenAI, Anthropic (Claude), Google Gemini, and any OpenAI-compatible endpoint
+- **Plugin isolation**: When `AI_LLM_KEY` is not set, the plugin is completely invisible -- no tab, no routes, no console errors
+- **Server-side proxy**: The API key never reaches the browser. All LLM calls go through the Nightscout server
 
 ## Features
 
-*   **New "AI Evaluation" Tab:** Integrated into the Reports section of Nightscout.
-*   **Configurable Prompts:**
-    *   **System Prompt:** Defines the role and general behavior of the LLM.
-    *   **User Prompt Template:** The main query or instruction for the LLM, which can include a `{{CGMDATA}}` token to dynamically insert the relevant report data.
-    *   Prompts are manageable via a new section in **Admin Tools**.
-*   **LLM Model Selection:** Users can specify which LLM model to use (e.g., "gpt-4o", "gpt-4-turbo").
-*   **Dynamic Data Injection:** The `{{CGMDATA}}` token in the user prompt is replaced with the actual JSON data from the selected report period.
-*   **Debugging Mode:** An option to display the exact prompts and model sent to the LLM, shown above the LLM's response in the AI Evaluation tab.
-*   **Secure API Key Handling:** The LLM API key is stored as a server-side environment variable and is not exposed to the client.
-*   **Token Usage Tracking:** Automatically tracks the number of tokens consumed and API calls made to the LLM, viewable in Admin Tools.
+- Client-side statistics: TIR, TBR, TAR, SD, CV, MAGE, hypo/hyper episode counting, diurnal breakdowns
+- LLM-powered pattern analysis, trend detection, and therapy recommendations
+- Multi-provider support: OpenAI, Anthropic Claude, Google Gemini, any OpenAI-compatible API
+- Configurable prompts via Admin Tools (stored in MongoDB)
+- Token usage tracking with cost calculation and optional currency conversion
+- 14-day maximum analysis window to manage cost and performance
+- Debug mode for inspecting prompts and API payloads
+- Monthly USD spending limit with automatic button disabling
+- Language support via Nightscout `LANGUAGE` setting
 
-## User Guide
+## DISCLAIMER
 
-### 1. Configuration
+**The information generated is not medical advice and must not be used as a substitute for professional diagnosis or treatment. The AI analysis may be inaccurate, incomplete, or incorrect. Use it only as a general indicator or for informational purposes. Always consult a qualified healthcare provider for medical decisions.**
 
-#### a. Environment Variables
+## Setup
 
-The following environment variables must be set on your Nightscout server. After setting or changing these, **restart your Nightscout server**.
+### Environment Variables
+
+Set these on your Nightscout server. **Restart required** after changes.
 
 #### Required
 
-*   `AI_LLM_KEY` (Required)
-    *   **Description:** Your API key for the LLM service (e.g., OpenAI).
-    *   *Example:* `sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
-*   `AI_LLM_API_URL` (Required)
-    *   **Description:** The API endpoint URL for your chosen LLM.
-    *   *Example (OpenAI compatible):* `https://api.openai.com/v1/chat/completions`
-*   `AI_LLM_MODEL` (Required)
-    *   **Description:** The specific model name for the LLM. If not set, the server may use its own default (e.g., `gpt-4o`), but explicitly setting this is recommended to ensure desired behavior.
-    *   *Examples:* `gpt-4o`, `gpt-4-turbo`, `claude-3-opus-20240229` (ensure compatibility with your API key/URL).
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `AI_LLM_KEY` | API key for the LLM service | `sk-xxxx...` |
+| `AI_LLM_API_URL` | Full API endpoint URL | See provider examples below |
+| `AI_LLM_MODEL` | Model name | See supported models below |
 
-#### Optional 
+#### Optional
 
-* `AI_LLM_TEMPERATURE` (Optional)
-    *   **Description:** Controls the randomness of the LLM's output. Higher values (e.g., 0.8) make the output more random, while lower values make it more deterministic. To maximize determinism and schema adherence, the default is now `0`.
-    *   *Default:* `0`
-    *   *Example:* `0.5`
-*   `AI_LLM_MAX_TOKENS` (Optional)
-    *   **Description:** The maximum number of tokens to generate in the LLM's response.
-    *   *Default:* `200`
-    *   *Example:* `500`
-*   `AI_LLM_DEBUG` (Optional)
-    *   **Description:** Set to `true` to enable debugging output on the AI Evaluation report tab.
-    *   *Default:* `false` (If the variable is not set, it defaults to false).
-    *   When enabled, this shows the model, system prompt, user prompt template, and the final user prompt (with data injected) above the LLM's response.
-*   `AI_LLM_1K_TOKEN_COSTS_INPUT` (Optional)
-    *   **Description:** The cost for 1000 input tokens.
-    *   *Default:* `0.005`
-*   `AI_LLM_1K_TOKEN_COSTS_OUTPUT` (Optional)
-    *   **Description:** The cost for 1000 output tokens.
-    *   *Default:* `0.015`
-*   `AI_LLM_EXCHANGERATE_API_KEY` (Optional)
-    *   **Description:** Your API key for exchangerate.host. This is required to enable currency conversion.
-*   `AI_LLM_EXCHANGERATE_API_CURRENCY` (Optional)
-    *   **Description:** The target currency to convert costs to (e.g., `EUR`, `GBP`). If this is set, the plugin will attempt to fetch exchange rates.
-*   `AI_LLM_EXCHANGERATE_API_LIMIT` (Optional)
-    *   **Description:** The maximum number of API requests to make to the exchange rate service per month.
-    *   *Default:* `100`
-*   `AI_LLM_EXCHANGERATE_API_POLING_INTERVALL` (Optional)
-    *   **Description:** The number of days to wait before fetching a new exchange rate.
-    *   *Default:* `7`
-*   `AI_LLM_MONTHLY_USD_LIMIT` (Optional)
-    *   **Description:** The maximum amount of USD to be spent on AI API calls per month. If this limit is reached, the "Send to AI" button will be disabled.
-    *   *Default:* `20`
-*   `AI_LLM_DEFAULT_DISPLAY` (Optional)
-    *   **Description:** Sets the default display mode for the AI responses in the report tab.
-    *   *Default:* `Show all results`
-    *   *Options:* `Show all results`, `Show final result only`
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_LLM_PROVIDER` | Auto-detected | Explicit provider override: `openai`, `anthropic` |
+| `AI_LLM_TEMPERATURE` | `0` | LLM randomness (0 = deterministic, 1 = creative) |
+| `AI_LLM_MAX_TOKENS` | `2000` | Maximum tokens in LLM response |
+| `AI_LLM_TIMEOUT` | `120` | LLM API timeout in seconds |
+| `AI_LLM_DEBUG` | `false` | Show prompts, payloads, and raw responses in the UI |
+| `AI_LLM_DEFAULT_DISPLAY` | `Show all results` | Default display mode |
+| `AI_LLM_MONTHLY_USD_LIMIT` | `20` | Monthly spending cap in USD (disables button when reached) |
+| `AI_LLM_1K_TOKEN_COSTS_INPUT` | `0.005` | Cost per 1000 input tokens (USD) |
+| `AI_LLM_1K_TOKEN_COSTS_OUTPUT` | `0.015` | Cost per 1000 output tokens (USD) |
+| `AI_LLM_EXCHANGERATE_API_KEY` | (none) | API key for exchangerate.host currency conversion |
+| `AI_LLM_EXCHANGERATE_API_CURRENCY` | (none) | Target currency code (e.g., `EUR`, `GBP`) |
+| `AI_LLM_EXCHANGERATE_API_LIMIT` | `100` | Max exchange rate API calls per month |
+| `AI_LLM_EXCHANGERATE_API_POLING_INTERVALL` | `7` | Days between exchange rate refreshes |
 
-#### b. Admin UI for Prompts (Recommended)
+### Provider Configuration
 
-For more flexible and persistent prompt management:
+#### OpenAI
 
-1.  Navigate to **Admin Tools** in your Nightscout site (usually accessible via `/admin` if you have admin rights).
-2.  Locate the section titled **"AI Evaluation Prompt Settings"**. (If this section is not visible, ensure your Nightscout server has been restarted after the plugin was deployed/updated, and try a hard refresh of your browser on the admin page.)
-3.  Configure the following:
-    *   **System Interim Prompt:** Defines the LLM's role for individual day analysis.
-        * Available Tokens (optional): `{{PROFILE}}`, `{{INTERIMRETURNFORMAT}}`
-    *   **User Interim Prompt Template:** The instruction for analyzing a single day's data.
-        * Available Tokens (**mandatory**): `{{CGMDATA}}`, `{{DATE}}`, `{{PROFILE}}`, `{{INTERIMRETURNFORMAT}}`
-    *   **System Prompt:** Define the LLM's role and general instructions for the final summary. 
-        * Available Tokens (optional): `{{PROFILE}}`, `{{FINALRETURNFORMAT}}`
-    *   **User Prompt Template:** This is the main instruction for the LLM's final summary.
-        * Available Tokens (optional):  `{{TIMEFROM}}`, `{{TIMETILL}}`, `{{DAYS}}`, `{{PROFILE}}`
-        * Available Tokens (**mandatory**): `{{INTERIMAIDATA}}`, `{{FINALRETURNFORMAT}}`
-    * Token Explanation:
-        * `{{CGMDATA}}`: Structured CGM data for the day that is sent to AI  
-        * `{{PROFILE}}`: JSON data of the active Nightscout profile (basal rates, ISF, carb ratios, targets, etc.) for the report period
-        * `{{DATE}}` / `{{TIMEFROM}}` / `{{TIMETILL}}` / `{{DAYS}}`: Information about the timeframe delivered
-        * `{{INTERIMAIDATA}}`: The data from the interim calls
-        * `{{INTERIMRETURNFORMAT}}` / `{{FINALRETURNFORMAT}}`: The returnformat expected from AI, so the final call and printing the result are technicaly possible
-4.  Click the **"Save Prompts"** button
-    *   These prompts are stored in the Nightscout database and will be used for all AI evaluations.
-    *   **Important:** If you leave the "System Prompt" or "User Prompt Template" fields empty in the Admin UI (or if they haven't been configured yet), the server will automatically use built-in default prompts for the AI evaluation.
-    *   It is recommended to review and customize these prompts in the Admin UI to best suit your analytical needs.
+```
+AI_LLM_API_URL=https://api.openai.com/v1/chat/completions
+AI_LLM_MODEL=gpt-4o
+AI_LLM_KEY=sk-...
+```
 
-##### Prompt Examples
+#### Anthropic (Claude)
 
-###### System Interim Prompt
+```
+AI_LLM_API_URL=https://api.anthropic.com/v1/messages
+AI_LLM_MODEL=claude-haiku-4-5-20251001
+AI_LLM_KEY=sk-ant-...
+```
 
-````
-You are an endocrinologist specialized in type 1 diabetes, expert in Nightscout CGM analytics.
+The provider is auto-detected from the URL (URLs containing "anthropic" use the Anthropic adapter). You can also set `AI_LLM_PROVIDER=anthropic` explicitly.
 
-SCOPE
-- Analyze exactly one calendar day of Nightscout data (CGM entries + treatments + profile).
-- Output must be self-contained, standardized, and aggregation-ready for later multi-day synthesis.
+#### Google Gemini (via OpenAI-compatible endpoint)
 
-CONDUCT
-- Use medical terminology only. Evidence-based, data-first. No speculation.
-- Do not reference other days. This analysis stands alone.
-- If no data is available for a certain time, mark it as null. Do not make up data. Stick exactly to the delivered data.
-- If a metric cannot be computed, return null and explain in data_quality_notes.
-- Output strictly valid JSON. No prose, no backticks.
+```
+AI_LLM_API_URL=https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+AI_LLM_MODEL=gemini-2.5-flash-lite
+AI_LLM_KEY=AIza...
+```
 
-DATA & UNITS
-- Glucose mg/dL.
-- Day partition: 00–06, 06–12, 12–18, 18–24 (local timezone of the data; assume timestamps in ms since epoch unless explicit).
-- Ranges: Low <70; Target 70–180; High >180.
-- TIR/TBR/TAR should be **time-weighted** (prefer sampling intervals; if only points exist, assume uniform spacing between readings and exclude gaps >15 min).
-- CV = SD / mean × 100.
-- Count hypos/hypers as **episodes** with persistence ≥15 minutes (>=3 consecutive 5‑min points). Merge episodes if separation <15 minutes.
-- Episode duration = continuous time within the threshold.
-- Diurnal distributions report: mean (avg), SD, %below/%in_range/%above by time block (time-weighted).
-- Data gaps: any gap >15 min. Sensor failure: explicit flags if present; otherwise infer improbable plateaus (≥45 min identical SGV) or out-of-physiology SGV (<40 or >400) as quality issues (do not exclude unless clearly erroneous; if excluded, document explicitly).
-- MAGE (Mean Amplitude of Glycemic Excursions): compute if ≥18 hours valid data. Algorithm: identify turning points via derivative sign change; keep excursions with absolute amplitude ≥1 SD of the day; MAGE = mean amplitude of qualifying peak–nadir (or nadir–peak) pairs. If insufficient qualifying pairs (n<4), set null and note.
+#### Any OpenAI-Compatible Endpoint (Ollama, vLLM, etc.)
 
-RECOMMENDATION RULES (day-limited)
-- Recommendations must cite concrete evidence from this day (e.g., time windows, % out of range, episode counts/durations).
-- Basal/I:C/ISF comments only if patterns align with classic signatures (e.g., fasting hyperglycemia 03:00–06:00 without carbs/bolus suggests dawn phenomenon); otherwise write none.
+```
+AI_LLM_API_URL=http://localhost:11434/v1/chat/completions
+AI_LLM_MODEL=llama3
+AI_LLM_KEY=ollama
+```
 
-OUTPUT
-- Respond with JSON **exactly** in the schema provided via the user prompt. Valid JSON, no markdown.
-````
+### Supported Model Tiers
 
-###### User Interim Prompt
+**Supported** (tested, tailored prompts/schemas):
 
-````
-Analyze Nightscout data for date {{DATE}}.
+| Model | Provider | Estimated Cost (14-day analysis) |
+|-------|----------|----------------------------------|
+| Gemini 2.5 Flash-Lite | Google | ~$0.008 |
+| gpt-5.4-nano | OpenAI | ~$0.017 |
+| gpt-5.4-mini | OpenAI | ~$0.064 |
+| Claude Haiku 4.5 | Anthropic | ~$0.080 |
 
-INPUTS
-{{CGMDATA}}
+**Compatible** (works via OpenAI-compatible path, not optimized):
 
-PROFILE
-{{PROFILE}}
+- Any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)
+- User's responsibility for prompt tuning and JSON reliability
 
-OBJECTIVES
-- Abnormalities/trends: hypoglycemia, hyperglycemia (timing, frequency, duration, pattern), variability (SD, CV, MAGE if calculable), diurnal patterns.
-- Diurnal profile: distribution 00–06, 06–12, 12–18, 18–24; classify <70 / 70–180 / >180.
-- Therapy adjustment (day-restricted): basal/I:C/ISF notes, timing issues (e.g., late bolus), DIA plausibility, daily routine effects.
-- Additional: TIR/TBR/TAR; mean/median/variance; closed-loop info if present; sensor failures/data gaps; alarm exposure if present.
+### Prompt Configuration (Admin Tools)
 
-RESPONSE RULES
-- Use data only from this date.
-- Use mg/dL and percent.
-- If anything is non-computable, set the numeric field to null and add a clear explanation in data_quality_notes.
+1. Navigate to **Admin Tools** (`/admin`)
+2. Find the **"AI Evaluation Prompt Settings"** section
+3. Configure:
+   - **System Prompt**: Defines the LLM's role and instructions
+   - **User Prompt Template**: The analysis instruction with placeholders
+4. Click **"Save Prompts"**
 
-RETURN FORMAT
-Return **only** valid JSON (no backticks, no trailing commas), matching exactly this schema and keys:
+Prompts are stored in MongoDB (`ai_prompt_settings` collection). If no prompts are configured, the UI shows a message directing to Admin Tools.
 
-{{INTERIMRETURNFORMAT}}
-````
+#### Available Placeholders
 
-###### System Final Prompt
+| Placeholder | Description |
+|-------------|-------------|
+| `{{CGMDATA_JSON}}` | Compact JSON of CGM data (SGV readings + treatments per day) |
+| `{{STATS_JSON}}` | Client-computed statistics (TIR, SD, CV, MAGE, episodes) |
+| `{{PROFILE_JSON}}` | Structured Nightscout profile (basal, ISF, carb ratios, targets) |
+| `{{LANGUAGE}}` | Language code from Nightscout LANGUAGE setting |
 
-````
-You are an endocrinologist specialized in type 1 diabetes and Nightscout analytics. Your task is to synthesize multiple single-day analyses (already standardized JSON) plus the Nightscout profile.
+## Usage
 
-CONDUCT
-- Medical terminology only. Evidence-based. No generalities.
-- No hallucinations; if data insufficient, state explicitly.
-- Output strictly valid JSON (no markdown; no commentary).
-- If no data is available for a certain time, do not make it up
+### Generating an Analysis
 
-AGGREGATION RULES
-- Inputs: array of daily JSON objects (exact schema from interim step), covering {{DAYS}} days for {{TIMEFROM}}–{{TIMETILL}}.
-- Overall metrics:
-  • Averages/SD/CV computed on pooled time-weighted series if available; otherwise weight by each day’s valid time.
-  • TIR/TBR/TAR: time-weighted across all valid intervals; exclude gaps >15 min.
-  • MAGE_overall: if ≥60% of days have valid MAGE, compute median of per-day MAGE; else null with note.
-- Episodes: merge across midnight if separation <15 min. Provide counts & durations by (a) total, (b) diurnal blocks, and (c) weekday vs weekend if possible from timestamps.
-- Diurnal patterns: aggregate by local time of day; report avg, SD, and %below/in/above for each 6-hour block.
-- Trend detection:
-  • Nocturnal hypoglycemia signature: ≥2 days with hypo episodes 00–06 totaling ≥30 min/day.
-  • Dawn phenomenon: pre-breakfast rise (≈03:00–08:00) with no carbs/bolus within prior 3h on ≥2 days, and 2h mean > target_high.
-  • Postprandial hyperglycemia: peaks >180 within 1–3h after carb entries on ≥2 days.
-  • Persistent hyperglycemia: >50% time >180 on ≥3 days.
-- Recommendations must be tied to quantified evidence (reference blocks, % out of range, episode stats). Separate “therapy_settings” (basal/I:C/ISF/DIA) vs “behavioral_timing” (bolus timing, meal timing, exercise).
+1. Go to **Reports** and click **"Show"** on any report type to load data
+2. Click the **"AI Evaluation"** tab
+3. The **Statistics** section appears immediately with computed metrics (TIR, SD, CV, MAGE, episodes, time-block breakdowns)
+4. Click **"Send to AI"** to request LLM interpretation
+5. The **Analysis** section renders trends, recommendations, and per-day notes when the LLM responds
 
-OUTPUT
-- Use the exact schema provided via the user prompt. Valid JSON only.
-````
+### Reading the Report
 
-###### User Final Prompt
+The report has two sections:
 
-````
-Synthesize the following daily analyses for {{TIMEFROM}}–{{TIMETILL}} ({{DAYS}} days):
+**Statistics** (always available, computed client-side):
+- Time in Range (TIR), Time Below Range (TBR), Time Above Range (TAR)
+- Average, median, standard deviation, coefficient of variation
+- MAGE (Mean Amplitude of Glycemic Excursions)
+- Hypo/hyper episode counts with durations
+- Diurnal distribution (00-06, 06-12, 12-18, 18-24)
 
-{{INTERIMAIDATA}}
+**Analysis** (requires LLM):
+- Summary of key findings
+- Detected trends with evidence and severity (info/warning/critical)
+- Therapy recommendations: settings (basal/I:C/ISF) and behavioral/timing
+- Monitoring suggestions
+- Per-day notes
+- Data quality observations
 
-Profile for context:
-{{PROFILE}}
+### If the LLM Call Fails
 
-OBJECTIVES
-- Abnormalities & trends across days (hypo/hyper timing, frequency, duration, patterns).
-- Variability (SD, CV, MAGE_overall if feasible).
-- Diurnal patterns (00–06, 06–12, 12–18, 18–24).
-- Therapy adjustment suggestions: basal, I:C, ISF, DIA; timing issues; lifestyle factors.
-- Additional: TIR/TBR/TAR; sensor failures/data gaps; alarm exposure (if present); loop behavior (if present).
+The statistics section remains visible. The analysis section shows an error message with a retry option. Common causes: network timeout, invalid API key, rate limit exceeded.
 
-RETURN FORMAT
-Return **only** valid JSON (no backticks, no text), matching the following schema and keys:
+### Usage Statistics (Admin Tools)
 
-{{FINALRETURNFORMAT}}
+In Admin Tools, the **"AI Usage Statistics"** section shows:
+- Monthly breakdown of requests, token usage, and costs
+- Input/output token split
+- Average tokens per request and per day
+- Currency conversion (if configured)
+- **Recalculate Summary** button for re-syncing aggregated data
+- **Delete Old Data** for managing database size
 
-````
+## Cost Guide
 
-#### c. Viewing AI Usage Statistics (Admin Tools)
+Costs depend on the model and date range. Single-call architecture significantly reduces costs compared to per-day calling patterns.
 
-A new section in Admin Tools allows you to monitor LLM usage in detail:
+**Estimated costs per analysis (USD):**
 
-1.  Navigate to **Admin Tools** in your Nightscout site.
-2.  Locate the section titled **"AI Usage Statistics"**.
-3.  This section displays a table with a monthly breakdown and a total summary of your AI usage. The columns provide a detailed view of token consumption:
-    *   **Month:** The calendar month of usage.
-    *   **Requests:** The total number of AI evaluation requests made.
-    *   **Total Days:** The total number of unique days analyzed across all requests.
-    *   **Avg Days/Req:** The average number of days analyzed per request.
-    *   **Repair Calls:** This is a grouped column showing the number of repair calls made by the JSON repair guardrail.
-        *   **Total:** The total number of repair calls.
-        *   **Avg/Req:** The average number of repair calls per request.
-    *   **Total Tokens:** This is a grouped column with three sub-columns:
-        *   **Input:** The total number of prompt tokens sent to the LLM.
-        *   **Output:** The total number of completion tokens received from the LLM.
-        *   **Total:** The sum of input and output tokens.
-    *   **Avg Tokens/Req:** This is a grouped column showing the average tokens used per request, broken down into:
-        *   **Input:** Average prompt tokens per request.
-        *   **Output:** Average completion tokens per request.
-        *   **Total:** Average total tokens per request.
-    *   **Avg Tokens/Day:** This is a grouped column showing the average tokens used per day analyzed, broken down into:
-        *   **Input:** Average prompt tokens per day.
-        *   **Output:** Average completion tokens per day.
-        *   **Total:** Average total tokens per day.
-    *   **Costs:** This is a grouped column showing the costs for the AI usage, broken down into:
-        *   **Total:** The total costs for the month.
-        *   **Avg/Req:** The average costs per request.
-        *   **Avg/Day:** The average costs per day requested.
-    *   **Currency Conversion:** If `AI_LLM_EXCHANGERATE_API_CURRENCY` is set, the table will also display the costs converted to the specified currency. A note will appear below the table indicating that conversion is active.
-4.  This detailed data helps monitor the cost and efficiency of LLM interactions.
-5.  **Recalculate Summary:** A "Recalculate Summary" button is available. If you suspect the summary data is out of sync with the raw data (e.g., after manual database changes), you can use this button to trigger a full recalculation.
-6.  **Delete Old Data:** A form is available to delete data older than a specified number of months. This is useful for managing the size of the database over time.
+| Model | 3-day | 7-day | 14-day |
+|-------|-------|-------|--------|
+| Gemini 2.5 Flash-Lite ($0.10/$0.40) | ~$0.002 | ~$0.004 | ~$0.008 |
+| gpt-5.4-nano ($0.20/$1.25) | ~$0.005 | ~$0.009 | ~$0.017 |
+| gpt-5.4-mini ($0.75/$4.50) | ~$0.016 | ~$0.033 | ~$0.064 |
+| Claude Haiku 4.5 ($1.00/$5.00) | ~$0.020 | ~$0.040 | ~$0.080 |
 
-### 2. Generating an AI Evaluation
+Set `AI_LLM_MONTHLY_USD_LIMIT` to cap spending. The "Send to AI" button disables when the limit is reached.
 
-1.  **Navigate to Reports:** Go to the "Reports" section of your Nightscout site.
-2.  **Load Report Data:** Select any standard report type (e.g., "Day to day," "Daily Stats"), choose your desired date range and other relevant filters, and click the main "Show" button for the reports. This action loads the data that will be available for the AI evaluation.
-    *   **Important:** The AI Evaluation is limited to a maximum of **14 days**. If you select a longer period, the "Send to AI" button will be disabled, and a message will prompt you to reduce the date range. This is to ensure good performance and manage LLM usage costs.
-3.  **Open AI Evaluation Tab:** In the list of report tabs, click on "AI Evaluation".
-    *   Upon opening the tab, the plugin will automatically check for all required configurations (API URL, Model, System Prompt, User Prompt Template).
-    *   If any settings are missing, a detailed error message will be displayed, guiding you on where to configure each item.
-    *   If all settings are correctly configured, a confirmation message will appear.
-4.  **Generating the Analysis:**
-    *   **Display Mode:** Above the "Send to AI" button, a new dropdown menu allows you to control how results are displayed:
-        *   **Show all results:** This will display the analysis for each day (interim results) one by one, followed by the final summary report.
-        *   **Show final result only:** This will only display the final summary report after all daily analyses are complete.
-        *   The default value for this dropdown can be set using the `AI_LLM_DEFAULT_DISPLAY` environment variable.
-    *   Click the **"Send to AI"** button to begin the analysis.
-    *   The system will show the progress as it processes each day.
-    *   The AI's JSON responses will be rendered into user-friendly HTML tables and lists for easy reading.
-    *   **Cost Information:** Below the "Send to AI" button, two lines of cost information will appear:
-        *   **Estimated Cost:** Shows the estimated cost for the selected number of days, based on your historical usage statistics.
-        *   **Costs for current month:** Shows the total accumulated cost for the current calendar month.
-    *   If currency conversion is enabled, the converted amounts will also be shown for both lines.
+## Troubleshooting
 
-### 3. Understanding the Output
+### Plugin not visible (no AI Evaluation tab)
 
-#### DISCLAIMER
-````
-The information generated is not medical advice and must not be used as a substitute for professional diagnosis or treatment.
-The AI analysis may be inaccurate, incomplete, or incorrect. Use it only as a general indicator or for informational purposes. 
-Always consult a qualified healthcare provider for medical decisions.
-````
+- `AI_LLM_KEY` must be set. The plugin is completely hidden without it.
+- Restart the Nightscout server after setting the key.
+- Check server startup logs for `AI plugin: enabled` or `AI plugin: disabled`.
 
-*   **AI Evaluation:** The main content area will show the rendered HTML reports from the LLM's JSON responses, displayed in an accordion format. Each report (final and interim) is an item in the accordion. The final report is expanded by default.
-*   **AI Usage Statistics:** After a successful analysis, a box will appear below the AI's response, showing detailed usage statistics for the session. This box is hidden until the analysis is complete. It includes:
-    *   The date range and number of days analyzed.
-    *   The total number of API calls made (interim, final, and any repair calls).
-    *   A breakdown of "Overall Session Usage" including:
-        *   **Prompt Tokens:** The total number of tokens sent to the AI.
-        *   **Completion Tokens:** The total number of tokens received from the AI.
-        *   **Total Tokens:** The sum of prompt and completion tokens.
-    *   For each token count, the associated cost in USD and the converted currency (if enabled) is also displayed.
-*   **Debug Information (If Enabled):** If `AI_LLM_DEBUG` is set to `true` (see Configuration section):
-    *   Four dedicated debug areas will appear in the AI Evaluation tab:
-        *   **"AI INTERIM PROMPT PAYLOAD (DEBUG):"** This area shows the JSON payload for the interim calls.
-        *   **"AI INTERIM Response Debug Area:"** This area is used to display information related to the interim AI calls.
-        *   **"AI PROMPT PAYLOAD (DEBUG):"** This area shows the complete JSON payload that is constructed by the client-side script. This payload (containing model, messages with injected data, temperature, and max_tokens) is what will be sent to Nightscout's `/api/v1/ai_eval` backend endpoint when the "Send to AI" button is clicked.
-        *   **"AI Response Debug Area:"** This area is used to display information related to the AI call.
-            *   When the "Send to AI" button is clicked, if `AI_LLM_DEBUG` is true, this area will initially show "Calling API...".
-            *   If the call to `/api/v1/ai_eval` is successful and `AI_LLM_DEBUG` is true, this area will display the full, raw JSON response received from the Nightscout server (which includes the LLM's processed output, token counts, and potentially other debug information from the server).
-            *   If the API call fails (e.g., network error, server error), this area will display the error message, regardless of the `AI_LLM_DEBUG` setting, to help with troubleshooting.
-    *   A button labeled **"Send to AI"** is present.
-        *   **Functionality:** After report data has been loaded and processed (which populates the "AI PROMPT PAYLOAD (DEBUG)" area if debug mode is on), clicking this button will:
-            1.  Take the internally constructed payload.
-            2.  Make a `POST` request to Nightscout's own backend endpoint: `/api/v1/ai_eval`.
-            3.  The button will display "Sending..." and become disabled during the API call.
-            4.  Upon completion (success or failure), the button will re-enable and revert its text to "Send to AI".
-        *   The actual call to the external LLM (e.g., OpenAI) is made by the Nightscout server using the secure `AI_LLM_KEY` environment variable. The client-side script does not handle this key directly.
+### "Send to AI" button disabled
 
-### 4. Troubleshooting
+- Verify `AI_LLM_API_URL` and `AI_LLM_MODEL` are set. The status area shows which settings are missing.
+- Check if the monthly spending limit has been reached.
+- Ensure the date range is <= 14 days.
 
-*   **"AI Evaluation Prompt Settings" Section Missing in Admin Tools:**
-    *   Ensure your Nightscout server has been **restarted** after the latest plugin code was deployed.
-    *   Try a hard refresh (Ctrl+F5 or Cmd+Shift+R) of your browser on the `/admin` page.
-    *   Check the Nightscout server startup logs for any errors related to loading admin plugins.
-*   **Error Messages or No AI Evaluation Response:**
-    *   Verify all required environment variables (`AI_LLM_KEY`, `AI_LLM_API_URL`, `AI_LLM_MODEL`) are correctly set and Nightscout was restarted.
-    *   Check your System and User Prompts in the Admin UI. Ensure the User Prompt Template contains the `{{CGMDATA}}` token.
-    *   Examine Nightscout server logs for detailed error messages (e.g., connection issues, API errors from the LLM, database errors).
-    *   Confirm your LLM API key is valid, active, and has sufficient credits/quota for the selected model.
-    *   Enable `AI_LLM_DEBUG=true`, restart, and try again. Review the displayed prompts to ensure they are correctly formed and the data seems reasonable.
-*   **"Report data not loaded yet..." Message:** Always load data via a standard report's "Show" button first before using the AI Evaluation tab.
-*   **Admin UI Save/Load Issues:**
-    *   Ensure your Nightscout instance can connect to its MongoDB database and has write permissions.
-    *   The user/role attempting to save prompts must have the `admin:api:ai_settings:edit` permission.
-        *   Standard Nightscout `admin` roles typically have wildcard (`*`) permissions, which includes this.
-        *   If you are using custom administrative roles, you **must** ensure that the role assigned to users managing AI prompts includes the exact permission string `admin:api:ai_settings:edit`. This can usually be done via the "Roles" section in the Admin Tools of your Nightscout site.
-        *   Check Nightscout server logs for authorization errors (e.g., "Unauthorized" or messages related to permissions) if saving fails.
-        *   The system now includes a retry mechanism (up to 3 attempts with increasing delays) for saving prompts if initial database write acknowledgments fail. If saving still fails after retries, server logs will show multiple attempt failures and potentially more detailed error information from the database driver. Persistent failures after retries may indicate a more significant issue with the MongoDB connection or server on your hosting platform.
+### LLM API errors
 
-## Technical Documentation
+- **504 Gateway Timeout**: The LLM took longer than `AI_LLM_TIMEOUT` seconds. Try a shorter date range or increase the timeout.
+- **502 Bad Gateway / Connection refused**: Check `AI_LLM_API_URL`. The server cannot reach the LLM endpoint.
+- **429 Rate limit exceeded**: Max 10 requests per minute. Wait and retry.
+- **401/403**: Invalid or expired API key.
 
-### 1. New Files and Key Modifications
+### Provider-specific issues
 
-*   **`lib/settings.js`:**
-    *   Settings like `ai_llm_model` and `ai_llm_debug` are read from environment variables. `AI_LLM_PROMPT` is no longer used.
-*   **`lib/report_plugins/ai_eval.js`:**
-    *   Defines the "AI Evaluation" report tab.
-    *   Its `html: function(client)` method generates the static HTML structure for the tab, including:
-    *   `#ai-eval-status-text`: For displaying settings status.
-    *   `#sendToAiButton`: A button to (eventually) trigger the AI API call.
-    *   `#aiEvalDebugArea`: A pre-formatted area to show the constructed AI request payload when `AI_LLM_DEBUG` is true.
-    *   `#aiEvalResponseDebugArea`: A pre-formatted area to (eventually) show the raw AI response when `AI_LLM_DEBUG` is true.
-    *   Placeholders for results (future).
-        *   **Crucially, all client-side JavaScript logic for the tab is now embedded within a `<script>` tag generated inside the `html()` method's output.** This embedded script runs when the tab is activated.
-        *   The plugin's `report: function(datastorage, sorteddaystoshow, options)` method:
-    *   Is called when the "Show" button for the AI Evaluation report is clicked.
-    *   It stores `datastorage`, `options`, and `sorteddaystoshow` onto `window.tempAiEvalReportData`.
-    *   It then calls `window.processAiEvaluationData()` (via `setTimeout`) to trigger data processing.
-        *   **`initializeAiEvalTab(passedInClient)` function (called by embedded script):**
-    *   Sets up initial UI elements (static settings display, "Waiting for data..." messages).
-    *   Stores `passedInClient` on `window.tempAiEvalPassedInClient` for later use.
-        *   **`processAiEvaluationData()` function (called by `report` function):**
-    *   Retrieves `passedInClient` from `window.tempAiEvalPassedInClient` and `reportData` from `window.tempAiEvalReportData`.
-    *   Fetches System and User prompt templates from `/api/v1/ai_settings/prompts` via AJAX.
-    *   Updates prompt status display on the UI.
-    *   **If `reportData` is available and prompts are fetched:**
-        *   It constructs the full AI request payload.
-        *   The `{{CGMDATA}}` placeholder in the user prompt template is replaced with a JSON string of relevant CGM data for each day.
-        *   The `{{PROFILE}}` placeholder is replaced with a JSON string of the active profile data (extracted from `reportData.datastorage`).
-        *   An array of "interim" payloads is created, one for each day in the report.
-        *   The `{{INTERIMAIDATA}}` placeholder in the final user prompt template is replaced with a JSON string of the responses from the interim calls.
-        *   It defines `interim_response_format` and `final_response_format` objects, which specify the JSON schema for the interim and final AI calls, respectively.
-        *   It creates `interim_response_format_token` and `final_response_format_token` variables, which are stringified versions of the response format objects. These are used to replace the `{{INTERIMRETURNFORMAT}}` and `{{FINALRETURNFORMAT}}` tokens in the prompts.
-        *   The `{{INTERIMRETURNFORMAT}}` and `{{FINALRETURNFORMAT}}` placeholders in the prompts are replaced with the JSON schema for the interim and final calls, respectively.
-        *   The final payload includes:
-            *   `model`: From `passedInClient.settings.ai_llm_model`.
-            *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (default 0.7).
-            *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (default 2000).
-            *   System and User messages.
-            *   `response_format`: The `interim_response_format` or `final_response_format` object, depending on the call.
-        *   If `passedInClient.settings.ai_llm_debug` is `true`, this constructed payload is displayed in the `#aiEvalDebugArea`.
-    *   Cleans up `window.tempAiEvalReportData` and `window.tempAiEvalPassedInClient`.
-    *   The API call payloads are now constructed with deterministic parameters: `top_p: 0.1`, `presence_penalty: 0`, `frequency_penalty: 0`. The `temperature` is now configurable via the `AI_LLM_TEMPERATURE` environment variable, with a default of `0` to maximize determinism.
-    *   A new `callAiWithRetry` function has been added to handle the interim API calls. This function includes a `try...catch` block to validate the JSON response from the AI. If parsing fails, it automatically triggers up to two repair attempts.
-    *   A new global counter, `window.aiRepairCalls`, is used to track the number of repair calls made during a session. This counter is reset with each new analysis.
-    *   The `usagePayload` sent to the `/api/v1/ai_usage/record` endpoint now includes the `repair_calls` count.
-    *   The JSON schemas for both the interim and final AI calls have been updated to include a `profile_snapshot_used: true` boolean flag in the `meta` object.
-*   **`aiResponsesDataObject`:**
-    *   A global object that stores the state of the AI evaluation.
-    *   `merged_by_date`: An object containing the merged interim responses by date.
-    *   `interim_call_tokens`: The total tokens used by the interim calls.
-    *   `interim_calls_amount`: The number of interim calls made.
-    *   `total_tokens_used`: The total tokens used by all calls (interim and final).
-    *   `prompt_tokens_used`: The total prompt tokens used for the entire session.
-    *   `completion_tokens_used`: The total completion tokens used for the entire session.
-    *   `date_from`: The start date of the evaluation period.
-    *   `date_till`: The end date of the evaluation period.
-    *   `final_response`: The response from the final AI call.
-    *   `total_calls`: The total number of API calls made.
-    *   `final_call`: A flag indicating if the final call has been made.
-*   **`lib/admin_plugins/ai_settings.js`:**
-    *   New admin plugin for the UI in Admin Tools to manage AI prompts.
-    *   Renders textareas for system and user prompts.
-    *   Fetches current prompts from `/api/v1/ai_settings/prompts` (GET).
-    *   Saves prompts via `/api/v1/ai_settings/prompts` (POST).
-*   **`lib/admin_plugins/ai_usage_viewer.js`:** (New)
-    *   Admin plugin to display detailed AI token usage statistics.
-    *   Fetches data from `/api/v1/ai_usage/monthly_summary` on initial load (`init` function) and when the "Refresh Data" button is clicked (`code` function).
-    *   Renders a table with monthly breakdowns and a total summary.
-*   **`lib/admin_plugins/index.js`:**
-    *   Registered the `ai_settings` and `ai_usage_viewer` admin plugins.
-*   **`lib/api/ai_settings_api.js`:**
-    *   New file defining API endpoints for managing AI prompts:
-        *   `GET /api/v1/ai_settings/prompts`: Fetches prompts from MongoDB.
-        *   `POST /api/v1/ai_settings/prompts`: Saves prompts to MongoDB. Requires `admin:api:ai_settings:edit` permission.
-*   **`lib/api/ai_usage_api.js`:** (New)
-    *   New file defining API endpoints for tracking AI usage:
-        *   `POST /api/v1/ai_usage/record`: Records token usage. Called internally by `/api/v1/ai_eval`.
-        *   `GET /api/v1/ai_usage/monthly_summary`: Retrieves aggregated monthly usage data.
-    *   **Currency Conversion:** This file also contains the logic for fetching and caching exchange rates from `exchangerate.host`.
-        *   It uses the `request` library to make API calls to `https://api.exchangerate.host/convert`.
-        *   The API key is passed as a query parameter `access_key`.
-        *   The fetched exchange rates are stored in a new MongoDB collection named `exchange_rates`.
-        *   The logic respects the `AI_LLM_EXCHANGERATE_API_POLING_INTERVALL` and `AI_LLM_EXCHANGERATE_API_LIMIT` settings.
-        *   The official documentation for the API can be found at [https://exchangerate.host/documentation](https://exchangerate.host/documentation).
-*   **`lib/server/env.js`:**
-    *   Modified to read the `AI_LLM_EXCHANGERATE_API_KEY` from the environment variables.
-*   **`lib/api/index.js`:**
-    *   Registered the `/ai_settings` and `/ai_usage` API routers.
-    *   Modified to pass the `env` object to the `ai_usage_api` module.
-    *   Modified the `/api/v1/ai_eval` (POST) endpoint (likely located within `lib/api/index.js`):
-        *   No longer uses `AI_LLM_PROMPT` environment variable.
-        *   Fetches System and User prompts from the database (`ai_prompt_settings` collection).
-        *   If prompts are not found in the database or are empty, it uses hardcoded default fallbacks:
-            *   Default System Prompt: `"You are an expert for diabetes and analyzing cgm data from nightscout"`
-            *   Default User Prompt Template: `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
-        *   Continues to use `req.settings.ai_llm_key`, `req.settings.ai_llm_api_url`, `req.settings.ai_llm_model`.
-        *   Includes debug information if `req.settings.ai_llm_debug` is true.
-        *   Records token usage.
+- **Anthropic**: Requires `max_tokens` in the request. The adapter sets a default of 4096 if not specified. The `anthropic-version: 2023-06-01` header is sent automatically.
+- **Gemini**: Use the OpenAI-compatible endpoint (`generativelanguage.googleapis.com/v1beta/openai/`), not the native Gemini API.
+- **Ollama/local**: Use `http://` (not `https://`). Set `AI_LLM_KEY` to any non-empty value (e.g., `ollama`).
 
-### 2. Database Changes
+### No prompts configured
 
-*   **`ai_prompt_settings` collection:**
-    *   Stores AI prompt configurations.
-    *   Typically a single document with `_id: "main_config"` containing:
-        *   `system_prompt` (String)
-        *   `user_prompt_template` (String)
-        *   `updated_at` (Date)
-    *   `upsert: true` is used for creation/update.
-*   **`ai_usage_stats` collection:** (New)
-    *   Stores a record for each complete AI evaluation request.
-    *   Each document contains:
-        *   `createdAt` (Date): The timestamp when the record was created.
-        *   `date_from` (String): The start date of the evaluation period.
-        *   `date_till` (String): The end date of the evaluation period.
-        *   `days_requested` (Number): The number of days analyzed in the request.
-        *   `prompt_tokens_used` (Number): The total prompt (input) tokens for the session.
-        *   `completion_tokens_used` (Number): The total completion (output) tokens for the session.
-        *   `total_tokens_used` (Number): The total tokens consumed for the entire request (interim + final).
-        *   `total_api_calls` (Number): The total number of API calls for the request (interim + final + repair calls).
-*   **`ai_usage_summary` collection:** (New)
-    *   Stores pre-aggregated summary data for performance.
-    *   Documents have `_id` values like "2023-10" for monthly summaries and "all_time" for the overall total.
-    *   Each document contains summed fields like `requests`, `total_days_requested`, `total_tokens`, `total_costs`, etc.
+If the Admin UI prompt fields are empty, the "Send to AI" button may not work. Configure prompts in Admin Tools > AI Evaluation Prompt Settings.
 
+### Exchange rate issues
 
-### 3. API Endpoints
+- Verify `AI_LLM_EXCHANGERATE_API_KEY` is valid at exchangerate.host.
+- Check server logs for exchange rate fetch errors.
+- The rate is cached for `AI_LLM_EXCHANGERATE_API_POLING_INTERVALL` days.
 
-*   **AI Evaluation:**
-    *   `POST /api/v1/ai_eval`
-        *   **Request Body:** `{ reportOptions: {...}, daysData: [...] }`
-        *   **Authorization:** Requires `api:treatments:read` permission.
-        *   **Functionality:** Orchestrates fetching prompts, preparing data, calling the LLM, and returning the response. Includes debug information if enabled.
-*   **AI Prompt Settings Management (Admin):**
-    *   `GET /api/v1/ai_settings/prompts`
-        *   **Authorization:** Requires `api:treatments:read` permission.
-        *   **Functionality:** Returns `{ system_prompt: "...", user_prompt_template: "..." }`.
-    *   `POST /api/v1/ai_settings/prompts`
-        *   **Request Body:** `{ system_prompt: "...", user_prompt_template: "..." }`
-        *   **Authorization:** Requires `admin:api:ai_settings:edit` permission.
-        *   **Functionality:** Saves the provided prompts to the database.
-*   **AI Usage Tracking:**
-    *   `POST /api/v1/ai_usage/record`
-        *   **Request Body:** `{ date_from: String, date_till: String, days_requested: Number, prompt_tokens_used: Number, completion_tokens_used: Number, total_tokens_used: Number, total_api_calls: Number }`
-        *   **Authorization:** Requires `api:treatments:read`.
-        *   **Functionality:** Records a new entry in `ai_usage_stats` and updates the corresponding monthly and all-time documents in `ai_usage_summary`. Called by the client after the final AI response is received.
-    *   `GET /api/v1/ai_usage/monthly_summary`
-        *   **Authorization:** Requires `api:treatments:read`.
-        *   **Functionality:** Returns an object containing aggregated statistics by reading from the `ai_usage_summary` collection. This is much faster than aggregating the raw data on each request.
-    *   `POST /api/v1/ai_usage/rebuild_summary`
-        *   **Authorization:** Requires `api:treatments:read`.
-        *   **Functionality:** Deletes all documents in `ai_usage_summary` and rebuilds them from the raw data in `ai_usage_stats`. Used by the "Recalculate Summary" button.
-    *   `POST /api/v1/ai_usage/delete_old`
-        *   **Request Body:** `{ months: Number }`
-        *   **Authorization:** Requires `api:treatments:read`.
-        *   **Functionality:** Deletes data from both `ai_usage_stats` and `ai_usage_summary` older than the specified number of months, then triggers a rebuild of the summary collection to update totals.
+### Debug mode
 
-### 4. Data Flow for AI Evaluation
+Set `AI_LLM_DEBUG=true` and restart. The UI shows:
+- Constructed JSON payload sent to the server
+- Raw LLM response
+- Provider selection and timing information
 
-**(Note: The following describes the data flow up to the point of constructing the request payload on the client-side for debugging. The actual sending of this payload to the LLM is not yet implemented in this phase.)**
+Server logs also show detailed request/response data when debug is enabled.
 
-1.  **User clicks "Show" for the "AI Evaluation" report in the Reports section.**
-    a.  Nightscout calls the `report(datastorage, sorteddaystoshow, options)` function within `lib/report_plugins/ai_eval.js`.
-    b.  This function stores the provided `datastorage`, `sorteddaystoshow`, and `options` onto `window.tempAiEvalReportData`.
-2.  **The AI Evaluation tab HTML is rendered, and its embedded script runs.**
-    a.  The `initializeAiEvalTab(passedInClient)` function is executed.
-    b.  It retrieves the data from `window.tempAiEvalReportData` (if available).
-    c.  It performs AJAX calls to `GET /api/v1/ai_settings/prompts` to fetch system and user prompt templates.
-    d.  The UI in `#ai-eval-status-text` is updated with settings and prompt statuses.
-3.  **Client-Side AI Request Payload Construction (for Debugging):**
-    a.  If report data was loaded and prompts were successfully fetched:
-    i.  A complete JSON payload for the LLM API is constructed. This includes:
-    *   `model`: From `passedInClient.settings.ai_llm_model`.
-    *   `messages`: An array containing the system prompt and the user prompt.
-    *   The user prompt has its `{{CGMDATA}}` token replaced with a JSON string derived from `reportData.datastorage` (containing entries, treatments, device status, etc.).
-    *   The user prompt has its `{{PROFILE}}` token replaced with a JSON string of the active profile data from `reportData.datastorage`.
-    *   The user prompt has its `{{INTERIMRETURNFORMAT}}` and `{{FINALRETURNFORMAT}}` tokens replaced with the appropriate response format JSON schema.
-    *   `temperature`: From `passedInClient.settings.ai_llm_temperature` (defaults to 0.7 if not set).
-    *   `max_tokens`: From `passedInClient.settings.ai_llm_max_tokens` (defaults to 2000 if not set).
-    *   `response_format`: The appropriate response format object (`interim_response_format` or `final_response_format`).
-        ii. If `passedInClient.settings.ai_llm_debug` is `true`, this entire constructed payload is stringified and displayed in the `#aiEvalDebugArea`.
-        b.  `window.tempAiEvalReportData` is deleted. `window.currentAiEvalPayload` is now set, and `passedInClient` (from `initializeAiEvalTab`'s scope) holds necessary client settings for the API call.
-4.  **Client-side initiates AI Evaluation via `/api/v1/ai_eval`:**
-    a.  User clicks the "Send to AI" button.
-    b.  The client-side script retrieves the `currentAiEvalPayload` (constructed in step 3.a.i).
-    c.  It makes a `POST` request using `fetch` to the Nightscout backend endpoint `/api/v1/ai_eval`. The body of this request is the `currentAiEvalPayload` (JSON stringified).
-5.  **Server-side `/api/v1/ai_eval` endpoint processing:**
-    a.  Receives the payload from the client (which includes `model`, `messages` array, `temperature`, `max_tokens`).
-    b.  Retrieves `AI_LLM_KEY`, `AI_LLM_API_URL` from server settings (`req.settings`).
-    c.  (It might re-verify/fetch prompts from DB or trust client's system/user prompts if payload structure changes).
-    c.  If the prompts from the database are empty or not found, the server applies new hardcoded default prompts:
-    *   Default System Prompt: `"You are an expert for diabetes and analyzing cgm data from nightscout"`
-    *   Default User Prompt Template: `"Analyze the provided glucose data: {{CGMDATA}} Identify any patterns, suggest potential reasons for fluctuations, and recommend actions to improve glucose stability. Present the analysis clearly, using tables or bullet points where appropriate."`
-    *   The `AI_LLM_PROMPT` environment variable is no longer used for prompts.
-        d.  The received `cgmDataPayload` (from the request body) is stringified and injected into the `{{CGMDATA}}` token of the effective user prompt template (custom or default).
-        e.  Constructs the final LLM payload (model, effective system prompt, final user message with injected data).
-        f.  Makes a POST request to the configured `AI_LLM_API_URL` with the LLM payload and `AI_LLM_KEY`.
-        g.  Receives the LLM's response.
-        h.  If the LLM call is successful and token information (e.g., `response.data.usage.total_tokens` for OpenAI) is available, it makes an internal POST request to `/api/v1/ai_usage/record` with the `total_tokens`.
-        h.  Constructs a JSON response for the client. This response includes:
-    *   `html_content`: The LLM's answer.
-    *   `tokens_used`: The number of tokens consumed for this specific request.
-    *   `debug_info` (if `AI_LLM_DEBUG` is true): An object containing `model`, `system_prompt`, and `final_user_prompt`.
-6.  **Client-side script in `ai_eval.js` receives the response:**
-    a.  Displays the `html_content` in `#aiResponseOutputArea`.
-    b.  Displays the `tokens_used` information (e.g., in `#aiStatistics`).
-    c.  If `AI_LLM_DEBUG` is true and `debug_info` is present, it's formatted and displayed in `#ai-eval-debug-info`.
-    d.  Handles and displays any errors received from the server.
+## Technical Reference
 
-### 5. Permissions
+### Module Structure
 
-*   **AI Evaluation (`POST /api/v1/ai_eval`):** Requires `api:treatments:read` (or similar report viewing permission).
-*   **Prompt Settings (`GET /api/v1/ai_settings/prompts`):** Requires `api:treatments:read`.
-*   **Prompt Settings (`POST /api/v1/ai_settings/prompts`):** Requires `admin:api:ai_settings:edit`. This permission string might need to be explicitly added to custom admin roles.
-*   **Usage Recording (`POST /api/v1/ai_usage/record`):** Called internally by `/ai_eval`. Currently uses `api:treatments:create` as a placeholder. For enhanced security, a dedicated system-level permission or internal authentication mechanism would be ideal if this endpoint were exposed more broadly.
-*   **Usage Summary (`GET /api/v1/ai_usage/monthly_summary`):** Currently uses `api:treatments:read`. Ideally, this would be a more specific `api:ai_usage:read` or an admin-level permission.
+```
+lib/report_plugins/
+  ai_eval.js                 # Plugin entry point (~100 lines)
+  ai_eval/
+    data_processor.js        # Data extraction, compact JSON formatting
+    llm_client.js            # API call with retry, JSON repair, fence stripping
+    renderer.js              # Report rendering with HTML escaping (XSS-safe)
+    schemas.js               # Unified response JSON schema
+    prompts.js               # Placeholder replacement, profile formatting
+    cost_tracker.js          # Usage recording, per-provider cost calculation
+
+lib/statistics.js            # Shared stats: TIR, SD, CV, MAGE, episodes
+                             # Used by ai_eval and available to other report plugins
+
+lib/ai/
+  index.js                   # Factory: createProvider(config)
+  providers/
+    openai_compat.js         # OpenAI + Gemini + any compatible (Node.js https)
+    anthropic.js             # Claude API (Node.js https)
+
+lib/api/
+  ai_eval_api.js             # LLM proxy with field whitelist + rate limiting
+  ai_settings_api.js         # Prompt settings CRUD
+  ai_usage_api.js            # Usage tracking + exchange rates
+```
+
+### Data Flow
+
+```
+1. User clicks "Show" on a report
+   -> datastorage loaded with CGM data
+
+2. User opens "AI Evaluation" tab
+   -> data_processor.prepareCgmData() extracts compact JSON
+   -> statistics.computeDayStats() runs for each day
+   -> statistics.computePeriodStats() aggregates across days
+   -> Stats section renders immediately via renderer.js
+
+3. User clicks "Send to AI"
+   -> prompts.js fills placeholders in prompt template
+   -> Client POSTs to /api/v1/ai_eval
+
+4. Server-side (ai_eval_api.js):
+   -> Rate limit check (10 req/min)
+   -> Field whitelist: messages, model, temperature, top_p, max_tokens
+   -> Provider auto-detection from AI_LLM_API_URL
+   -> createProvider() -> openai_compat or anthropic adapter
+   -> adapter.chatCompletion(payload) via Node.js https
+   -> Normalized response: { content, usage: { prompt_tokens, completion_tokens } }
+   -> Return to client as { html_content, usage }
+
+5. Client receives response
+   -> JSON repair if needed (fence stripping, retry)
+   -> renderer.js renders analysis with HTML escaping
+   -> cost_tracker.js records usage
+```
+
+### Provider Adapters
+
+Both adapters use Node.js built-in `https`/`http` modules (not the deprecated `request` package).
+
+**OpenAI-compatible** (`openai_compat.js`):
+- Auth: `Authorization: Bearer {key}`
+- System prompt: in `messages` array as `{ role: 'system' }`
+- Response: `choices[0].message.content`
+- Usage: `{ prompt_tokens, completion_tokens }`
+- Structured output: `response_format: { type: 'json_schema', ... }`
+
+**Anthropic** (`anthropic.js`):
+- Auth: `x-api-key` header + `anthropic-version: 2023-06-01`
+- System prompt: top-level `system` parameter (extracted from messages)
+- Response: `content[0].text`
+- Usage: `{ input_tokens, output_tokens }` (normalized to `prompt_tokens`, `completion_tokens`)
+- Structured output: schema embedded in system prompt (Anthropic doesn't support `response_format`)
+- `max_tokens` required (defaults to 4096)
+
+### Unified Response Schema
+
+The LLM returns structured JSON matching `CgmAnalysisSchema`:
+
+```json
+{
+  "period": { "from": "2026-03-01", "to": "2026-03-07", "days": 7 },
+  "summary": ["Key finding 1", "Key finding 2"],
+  "trends": [
+    { "label": "Nocturnal hypoglycemia", "evidence": "...", "severity": "warning" }
+  ],
+  "recommendations": {
+    "therapy_settings": [{ "action": "...", "rationale": "..." }],
+    "behavioral_timing": [{ "action": "...", "rationale": "..." }],
+    "monitoring": ["..."]
+  },
+  "per_day": [{ "date": "2026-03-01", "notes": ["..."] }],
+  "data_quality_notes": ["..."]
+}
+```
+
+Statistics (TIR, SD, CV, MAGE, episodes) are **not** in the LLM schema -- they are computed client-side.
+
+### API Endpoints
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| POST | `/api/v1/ai_eval` | `api:treatments:read` | LLM proxy (rate limited, field whitelist) |
+| GET | `/api/v1/ai_settings/prompts` | `api:treatments:read` | Fetch prompt templates |
+| POST | `/api/v1/ai_settings/prompts` | `admin:api:ai_settings:edit` | Save prompt templates |
+| POST | `/api/v1/ai_usage/record` | `api:treatments:read` | Record token usage |
+| GET | `/api/v1/ai_usage/monthly_summary` | `api:treatments:read` | Aggregated usage data |
+| POST | `/api/v1/ai_usage/rebuild_summary` | `api:treatments:read` | Rebuild summary from raw data |
+| POST | `/api/v1/ai_usage/delete_old` | `api:treatments:read` | Delete data older than N months |
+
+### Database Collections
+
+| Collection | Purpose |
+|------------|---------|
+| `ai_prompt_settings` | Stores system + user prompt templates (single doc, `_id: "main_config"`) |
+| `ai_usage_stats` | Per-request usage records (tokens, costs, dates) |
+| `ai_usage_summary` | Pre-aggregated monthly summaries for fast display |
+| `exchange_rates` | Cached currency conversion rates (upsert by currency pair) |
+
+### Security
+
+- **API key isolation**: `AI_LLM_KEY` is in `secureSettings` -- never sent to the client. The client sees only a boolean `ai_llm_key_is_set` flag.
+- **Field whitelist**: The server-side proxy only forwards known fields (`messages`, `model`, `temperature`, `top_p`, `max_tokens`) to the LLM. Unknown fields are silently dropped.
+- **Response format**: `response_format` is set server-side from the known schema -- client-provided schemas are never forwarded.
+- **Rate limiting**: In-memory counter, max 10 requests per minute, returns 429 on exceed.
+- **XSS protection**: All LLM-sourced content is HTML-escaped before rendering.
+- **Prompt injection mitigation**: Treatment notes are JSON-encoded strings in a structured data block, never raw text interpolation.
+- **Response size cap**: 10 MB maximum on LLM responses to prevent memory exhaustion.
+- **Error sanitization**: Provider error details are not leaked to the client.
+
+### Plugin States
+
+| State | Condition | Behavior |
+|-------|-----------|----------|
+| **Not configured** | `AI_LLM_KEY` not set | Plugin completely invisible. No tab, no routes, no console errors. |
+| **Partially configured** | Key set, URL or model missing | Tab visible, stats display, "Send to AI" disabled with status message. |
+| **Fully configured** | All required vars set + prompts configured | Full functionality. |
+
+Changing `AI_LLM_KEY` requires a server restart (same as all Nightscout env vars). Disabling the plugin does not delete saved prompts or usage data.
