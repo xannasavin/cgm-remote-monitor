@@ -404,6 +404,130 @@ describe('ai_eval plugin', function () {
         var treatment = result.cgmData.days[0].treatments[0];
         treatment[3].should.equal('ignore previous instructions');
       });
+
+      it('should filter zero-value treatment rows (no carbs, no insulin, no notes) from the LLM-bound array', function () {
+        // Payload-size fix: pump-tick Temp Basal entries with carbs=0, insulin=0,
+        // notes=null used to be shipped to the LLM at 5-min cadence. They carry
+        // zero clinical signal and bloat 6-day reports by ~40KB.
+        var datastorage = {
+          '2026-03-15': {
+            sgv: [
+              { mills: 1710460800000, sgv: 120 }
+              , { mills: 1710461100000, sgv: 125 }
+              , { mills: 1710461400000, sgv: 130 }
+            ]
+            , treatments: [
+              { mills: 1710460800000, carbs: 0, insulin: 0, notes: null }       // drop
+              , { mills: 1710460900000, carbs: 0, insulin: 0, notes: '' }       // drop (empty note)
+              , { mills: 1710461000000, carbs: 30, insulin: 2, notes: null }    // keep (carbs+insulin)
+              , { mills: 1710461050000, carbs: 0, insulin: 0.5, notes: null }   // keep (insulin only)
+              , { mills: 1710461100000, carbs: 0, insulin: 0, notes: 'Cannula Filled' } // keep (note)
+              , { mills: 1710461200000, carbs: 0, insulin: 0 }                  // drop (no notes field at all)
+            ]
+          }
+          , profiles: []
+          , alldays: 1
+        };
+        var result = dataProcessor.prepareCgmData(datastorage, {}, {});
+        var treatments = result.cgmData.days[0].treatments;
+        treatments.should.have.length(3);
+        // Check kept rows by their distinguishing field:
+        treatments.some(function (t) { return t[1] === 30 && t[2] === 2; }).should.be.true();
+        treatments.some(function (t) { return t[2] === 0.5; }).should.be.true();
+        treatments.some(function (t) { return t[3] === 'Cannula Filled'; }).should.be.true();
+      });
+
+      it('should keep full treatment list for stats computation even when LLM array is filtered', function () {
+        // Regression guard: filtering for the LLM must not starve the stats
+        // computation, which needs every pump tick for coverage/hotspot analysis.
+        var datastorage = {
+          '2026-03-15': {
+            sgv: [{ mills: 1710460800000, sgv: 120 }]
+            , treatments: [
+              { mills: 1710460800000, carbs: 0, insulin: 0, notes: null, eventType: 'Temp Basal', rate: 1.2, duration: 30 }
+              , { mills: 1710461100000, carbs: 0, insulin: 0, notes: null, eventType: 'Temp Basal', rate: 1.2, duration: 30 }
+              , { mills: 1710461400000, carbs: 30, insulin: 2, notes: 'Meal' }
+            ]
+          }
+          , profiles: []
+          , alldays: 1
+        };
+        var result = dataProcessor.prepareCgmData(datastorage, {}, {});
+        // Only the meal row survives for the LLM (2 temp basals filtered):
+        result.cgmData.days[0].treatments.should.have.length(1);
+        // Stats see all 3 though — treatment_summary should still pick up the meal:
+        result.cgmData.days[0].stats.should.have.property('total_insulin');
+        result.cgmData.days[0].stats.total_insulin.should.equal(2);
+        result.cgmData.days[0].stats.total_carbs.should.equal(30);
+      });
+    });
+
+    describe('buildSinglePayload', function () {
+      function makeCgmData () {
+        return {
+          days: [
+            {
+              date: '2026-03-15'
+              , sgv: [[1710460800000, 120]]
+              , treatments: [[1710460800000, 30, 2, 'Meal']]
+              , stats: {
+                average: 120, median: 120, sd: 0, cv: 0, tir_pct: 100, tbr_pct: 0, tar_pct: 0
+                , total_carbs: 30, total_insulin: 2
+                , time_blocks: [{ hour: 8, avg: 120, sd: 0, count: 1 }]  // should be stripped
+              }
+            }
+          ]
+          , period_stats: {
+            average: 120, median: 120, tir_pct: 100
+            , treatment_summary: { total_carbs: 30, total_insulin: 2, avg_daily_carbs: 30, avg_daily_insulin: 2 }
+          }
+          , profile: { basal: [], carbratio: [], sensitivity: [] }
+          , meta: { days: 1, from: '2026-03-15', to: '2026-03-15', units: 'mg/dl' }
+        };
+      }
+
+      it('should strip time_blocks from per_day stats when building the LLM payload', function () {
+        var payload = dataProcessor.buildSinglePayload(
+          makeCgmData()
+          , { system_prompt: 'sys {{STATS_JSON}}', user_prompt_template: 'usr {{STATS_JSON}}' }
+          , {}
+          , 'en'
+        );
+        var userContent = payload.messages[1].content;
+        userContent.should.not.match(/time_blocks/);
+        // But the main stats fields should still be present:
+        userContent.should.match(/total_carbs/);
+        userContent.should.match(/total_insulin/);
+      });
+
+      it('should not embed the response schema in the prompts (structured output handles it)', function () {
+        // Default prompts no longer reference {{RETURNFORMAT}}. Any remaining
+        // prompt still gets the replacement for backwards compat, but a prompt
+        // that omits the placeholder must NOT accidentally receive the schema.
+        var payload = dataProcessor.buildSinglePayload(
+          makeCgmData()
+          , { system_prompt: 'Just analyze the data.', user_prompt_template: 'Data: {{CGMDATA_JSON}}' }
+          , {}
+          , 'en'
+        );
+        payload.messages[0].content.should.equal('Just analyze the data.');
+        payload.messages[1].content.should.not.match(/CgmAnalysisSchema/);
+        // But response_format on the payload itself MUST still carry the schema:
+        payload.should.have.property('response_format');
+        payload.response_format.should.have.property('type', 'json_schema');
+        payload.response_format.json_schema.should.have.property('name', 'CgmAnalysisSchema');
+      });
+
+      it('should still replace {{RETURNFORMAT}} if a user-customised prompt uses it', function () {
+        var payload = dataProcessor.buildSinglePayload(
+          makeCgmData()
+          , { system_prompt: 'sys', user_prompt_template: 'Schema:\n{{RETURNFORMAT}}' }
+          , {}
+          , 'en'
+        );
+        payload.messages[1].content.should.not.match(/\{\{RETURNFORMAT\}\}/);
+        payload.messages[1].content.should.match(/period/);
+      });
     });
   });
 
