@@ -146,6 +146,7 @@
     "csv-parse": "^4.12.0",
     "env-cmd": "^10.1.0",
     "eslint": "^7.19.0",
+    "eslint-plugin-no-unsanitized": "^4.0.2",
     "eslint-plugin-security": "^1.4.0",
     "eslint-webpack-plugin": "^2.7.0",
     "mocha": "^8.4.0",

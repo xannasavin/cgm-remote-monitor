@@ -19,6 +19,7 @@ The AI Evaluation plugin adds an "AI Evaluation" tab to the Nightscout Reports s
 ## Features
 
 - Client-side statistics: TIR, TBR, TAR, SD, CV, MAGE, hypo/hyper episode counting, diurnal breakdowns
+- Pump-action pipeline: scheduled vs actual basal, auto-bolus classification (multi-language), coverage hotspots, basal suspensions
 - LLM-powered pattern analysis, trend detection, and therapy recommendations
 - Multi-provider support: OpenAI, Anthropic Claude, Google Gemini, any OpenAI-compatible API
 - Configurable prompts via Admin Tools (stored in MongoDB)
@@ -306,6 +307,103 @@ lib/api/
    -> renderer.js renders analysis with HTML escaping
    -> cost_tracker.js records usage
 ```
+
+### Pump-Action Pipeline
+
+Beyond the standard glucose statistics, the plugin computes a pump-action summary (`computePumpActionStats` in `lib/statistics.js`) that characterizes what the pump itself was doing over the period: scheduled vs delivered basal, auto-bolus clustering, coverage hotspots, and suspensions. This section feeds both the client charts (basal delta, auto-bolus distribution) and the LLM payload under `pump_action_stats`.
+
+#### Data Flow
+
+```
+treatments, profileStore, dateKeys, options
+   │
+   ├─> validateProfileForBasal()        -> profile_valid, profile_issue
+   ├─> (inline) Profile Switch scan     -> profile_switch_detected, validation_warnings
+   ├─> detectPumpCoverage()             -> { pumpDays, totalDays, pumpCoveredKeys }
+   ├─> sumScheduledBasalByHour()        -> basal_scheduled.hourly (profile-derived)
+   ├─> integrateActualBasalByHour()     -> basal_actual.hourly (temp basal + gap-fill)
+   ├─> classifyAutoBoluses()            -> user/auto split by note keywords + timing
+   ├─> computeBolusDistribution()       -> user boluses / total days, auto / pump days
+   ├─> detectHotspots()                 -> hourly cells with repeated temp-basal delta
+   └─> detectBasalSuspensions()         -> { start, end } pairs for Suspend/Resume
+```
+
+Note: the Profile Switch scan runs inline during treatment validation (same loop that collects `validation_warnings`), not as a separate trailing step. The diagram lists it as a conceptual stage to keep the output shape explicit.
+
+The orchestrator is **fail-soft**: it returns the full output shape even when the profile is missing, there are zero pump days, or the treatments array is empty. Downstream renderers never need defensive short-circuits — they read `profile_valid` and `pumpDays` to decide what to show.
+
+#### Insulin-Accounting Model
+
+Boluses are split into two disjoint classes:
+
+- **User boluses** — meal boluses, correction boluses, and any bolus whose `notes` do *not* contain a recognized auto-bolus keyword. Classified via `isUserBolusEvent()`.
+- **Auto boluses** — pump-initiated corrections whose `notes` explicitly contain one of the `AUTO_BOLUS_KEYWORDS` (English, German, French, Italian, Spanish variants). Classified via `isAutoBolusEvent()`.
+
+This is a **positive-match** classifier: missing or empty notes always count as user bolus. We never infer "this must have been automatic" from timing alone. The multi-language keyword list is exported so the LLM prompt can describe what was matched.
+
+Auto boluses are further bucketed by distance to the nearest preceding user bolus:
+
+| Bucket | Condition (default thresholds) |
+|--------|---------------------------------|
+| `near_meal` | auto within 120 min after a user bolus |
+| `intermediate` | 120–240 min after the last user bolus |
+| `far_from_meal` | > 240 min after the last user bolus, or orphaned (no user bolus in window) |
+
+Thresholds are configurable via `nearMealMinutes` / `farFromMealMinutes` in `options`.
+
+#### R3-12 Denominator Split
+
+The daily averages use **different denominators** for user and auto boluses:
+
+- **User boluses / day** = totalUserBoluses / `dateKeys.length` (total days in period)
+- **Auto boluses / day** = totalAutoBoluses / `pumpDayCount` (only pump-covered days)
+
+Rationale: user boluses happen on every day of the period (they require only a CGM and a pen or pump). Auto boluses can only happen on days the pump is actively running — averaging them over days when the user was on MDI would artificially suppress the rate. See `computeBolusDistribution()` tests for invariants.
+
+#### Pump-Coverage Handling
+
+A day is counted as **pump-covered** when it contains at least one of:
+
+- A `Temp Basal` event
+- A `Basal Suspension` event
+- A `Basal Resume` event (paired with a preceding suspension in looped setups)
+- Any treatment whose `enteredBy` string contains the substring `Pump` (catches events that pump-sync tooling tags as pump-authored even when the `eventType` is something else)
+
+This covers both temp-basal-driven pumps (Control-IQ, 780G) and fully-looped setups (AndroidAPS, iAPS, Loop) where Suspend/Resume pairs are a common looping primitive (R3-4). The `enteredBy` fallback is specifically for integrations that stream raw pump events without remapping them to the Nightscout `Temp Basal` eventType.
+
+When `pumpDays === 0`, the pipeline uses `basal_source: 'profile_fallback'` — scheduled basal is shown, actual basal is zeroed, and the client hides the delta chart. When `pumpDays > 0` and `pumpDays < totalDays`, the period is mixed (partial pump coverage, e.g. 3 pump days + 4 CGM-only days) and both values are returned; the client labels the delta as partial.
+
+#### Admin-Configurable Thresholds
+
+All pump-action thresholds are passed via the `options` object, sourced from Admin Tools settings (with sensible defaults):
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `nearMealMinutes` | 120 | Auto bolus within this window of a user bolus = `near_meal` |
+| `farFromMealMinutes` | 240 | Auto bolus beyond this window = `far_from_meal` |
+| `hotspotMinDays` | 3 | Minimum distinct days an hour must show a consistent temp-basal delta before it's flagged as a hotspot |
+| `deltaThresholdPct` | 15 | Percent deviation from scheduled basal before a temp basal counts toward a hotspot |
+| `signalTempBasal` | true | Include temp basal events in hotspot signal aggregation |
+| `signalAutoBolus` | true | Include auto boluses in hotspot signal aggregation |
+| `signalSuspension` | true | Include basal suspensions in hotspot signal aggregation |
+
+Tighter `deltaThresholdPct` or higher `hotspotMinDays` produces fewer but more confident hotspots. Changing signal toggles is useful for loop users whose suspensions should not count as "loop hunting" in the hotspot view.
+
+#### Travel-Day Artifact (Timezone Handling)
+
+Pump-action metrics bucket events by **local hour of day**. When the user travels across time zones mid-period (e.g. Berlin → Tokyo), the `localHour` for an event is derived from its `mills` timestamp combined with the zone-offset in effect at that moment — not a fixed period-wide offset. The invariant "the same wall-clock hour maps to the same bucket" therefore does not hold across a timezone change; a 13:00 Berlin event on day 1 and a 13:00 Tokyo event on day 5 land in different local hours but both remain correctly attributed to their own local day.
+
+Regression coverage: `tests/statistics.test.js` → `R3-10 travel invariant (Berlin → Tokyo mid-period)`.
+
+Implication for readers: on travel days the hourly distribution is expected to look shifted by the zone delta. This is correct behavior, not an artifact to debug.
+
+#### Single-Profile Limitation (R3-11)
+
+The current pipeline computes `basal_scheduled` from a single profile — `profile.store.Default` (or the named default) at call time. Nightscout supports **Profile Switch** treatment events that let a user run on a different profile for a period, but the pipeline does **not** integrate across multiple profiles when computing scheduled basal.
+
+**Mitigation:** the orchestrator scans treatments for any `eventType === 'Profile Switch'` and sets `pump_action_stats.profile_switch_detected = true` when at least one is present. The renderer consumes this flag to display a "profile switch detected — basal delta may be approximate" notice next to the chart, so users know the scheduled baseline may not match the profile that was actually active at event time.
+
+Full multi-profile integration is deferred (tracked as R3-11 in the plan). The `profile_switch_detected` flag is a deliberate one-line compromise that preserves correctness of the warning surface without blocking the rest of the report.
 
 ### Provider Adapters
 

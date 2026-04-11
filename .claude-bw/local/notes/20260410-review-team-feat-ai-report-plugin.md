@@ -472,3 +472,114 @@ Remaining OPEN items (non-blocking):
 - R1-2: Deployment ordering (SKIP)
 - R1-3: API endpoint tests (DEFER)
 - All suggestions: SKIP
+
+---
+
+# Team Review Report
+**Date:** 2026-04-11
+**Mode:** code
+**Profile:** default-code
+**Branch:** feat/ai-report-plugin (uncommitted Phase B+C delta)
+**Base:** HEAD (working tree only — 2,571 insertions / 67 deletions / 9 files)
+**Files reviewed:** lib/statistics.js, tests/statistics.test.js, lib/report_plugins/ai_eval.js, lib/report_plugins/ai_eval/{charts.js,renderer.js,data_processor.js,schemas.js}, translations/{en/en.json,de_DE.json}
+
+## Team Review: Phase B+C uncommitted delta — profile `default-code`
+
+### Quick Reference
+| Reviewer | Verdict | Critical | Warnings | Suggestions |
+|----------|---------|----------|----------|-------------|
+| R1 Frontend Senior | concerns | 3 | 6 | 7 |
+| R2 Backend Senior | concerns | 1 | 3 | 7 |
+| R3 Devil's Advocate | issues | 3 | 5 | 5 |
+| R4 End User | concerns | 5 | 4 | 4 |
+| R5 Product Manager | ready-with-gaps | 0 | 4 | 0 |
+
+---
+
+### Critical Findings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-1 | Missing CSS for `.cgm-details` / `<summary>` — three collapsible sections (Treatment Summary, Diurnal Patterns, Daily Breakdown) render as unstyled browser defaults. No visual affordance that they're collapsible, no padding, no hover/focus-visible treatment. **File:** `lib/report_plugins/ai_eval.js` unifiedCss block. | R1 Frontend Senior | FIX | OPEN |
+| R1-2 | Missing CSS for `.cgm-grounding-badge`, `.cgm-legend-swatch`, `.cgm-legend-item`, `.cgm-coverage-badge`, `.cgm-data-quality-note`, `.cgm-pump-notice`, `.cgm-insulin-legend` — all defined in the new renderer HTML but never styled. Grounding badges "?" and "‹→›" render as plain text; insulin legend swatches are invisible; coverage badges blend into headings. **Files:** `renderer.js`, `ai_eval.js` unifiedCss. | R1 Frontend Senior | FIX | OPEN |
+| R1-3 | Hardcoded `viewBox="0 0 900 H"` on every chart with `font-size: 10px` axis text. On 320px mobile the axis labels shrink to ~3.5px and become illegible. No media query, no responsive font scaling. **Files:** `charts.js` all four new render functions. | R1 Frontend Senior | FIX | OPEN |
+| R2-2 | When `profile_valid === false` the renderer shows "Profile data unavailable — basal delta cannot be computed" but **never displays `pumpActionStats.profile_issue`** — so the reason (missing basal array, malformed segment, non-finite value) is silently dropped. Users can't diagnose their profile problem. **File:** `renderer.js:131` Basal Delta fallback branch. | R2 Backend Senior | FIX | OPEN |
+| R3-2 | LLM response shape fragility: schema now requires `treatment_insights.*` items to be `{text, refers_to_hotspot?}` objects with `required: ['text']`, but the renderer accepts both legacy strings and new objects. If the LLM returns inconsistent items across lists, the `response_format` schema validation rejects the entire response at the API boundary with "Could not parse AI response" — no graceful degradation. **File:** `schemas.js` + `renderer.js` renderInsightItem. | R3 Devil's Advocate | FIX | OPEN |
+| R3-3 | Missing null guards on `pumpStats.hotspots.perHour/hotspots/pumpDays` in the renderAnimationFrame chart dispatch. If `computePumpActionStats` ever returns a partial `{ hotspots: {} }` shape (e.g., zero-day edge case), D3 silently produces a broken SVG and the user sees "Loading chart…" forever. **File:** `ai_eval.js:357-365`. | R3 Devil's Advocate | FIX | OPEN |
+| R3-1 | Module-level `currentTranslate` singleton race (also R2-3): a single module-level reference shared across all renderer/charts calls. If two AI Eval tabs mount simultaneously, the second `setTranslate()` overwrites the first and the first instance's async chart render uses the second instance's i18n. Silent: falls back to English keys if stale. **Files:** `renderer.js:6-12`, `charts.js:274-283`. | R3 Devil's Advocate (also R2-3) | FIX | OPEN |
+| R4-1 | "Pump Action Hotspots" / "Basal Delta" are domain jargon without explanation. A Type-1 diabetic opens the report and sees two new section headers with no subtitle, tooltip, or intro text explaining what a "hotspot" or "delta" means. German "Pumpenaktions-Hotspots" / "Basal-Abweichung" don't help. **Merged R4-1 + R4-2.** **File:** `renderer.js` new section headers. | R4 End User | FIX | OPEN |
+| R4-3 | Collapsible-by-default hides **Daily Breakdown** — the most useful artifact for spotting day-to-day trends. Users open the report, see charts, and have no hint that three more tables (Treatment Summary, Diurnal, Daily Breakdown) exist behind `<details>`. The new User/Auto bolus split column is buried inside this collapsed table. | R4 End User | FIX | OPEN |
+| R4-4 | Data-quality callout tone is alarming: *"almost certainly missing treatments in the export"* reads like "your data is broken" to a diabetic who just wants to understand their numbers. Triggers on sparse pump coverage (&lt;50%) which is common, undermining report trust. **File:** `renderer.js` dataQualityHtml. | R4 End User | FIX | OPEN |
+| R4-5 | "Loading chart…" placeholder flashes visibly before D3 replaces it. On fast connections this is ~16ms jank; on slow devices the user sees unstyled text then a chart pop in. Four charts × flash = noticeable friction. **File:** `renderer.js` chart placeholder text. | R4 End User | FIX | OPEN |
+
+---
+
+### Warnings
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-4 | Episode overlay circles (hypo/hyper) on the hotspot chart have no legend, no label, no `<title>` tooltip, and no mention in the chart's `aria-label`. Screen readers don't know episode markers exist. | R1 Frontend Senior | FIX | OPEN |
+| R1-5 | Insulin Distribution stacked color `#e0af68` (auto correction) fails WCAG AA contrast against white (~3.2:1 vs 4.5:1 required). Users with deuteranopia may not distinguish auto correction from basal. | R1 Frontend Senior | FIX | OPEN |
+| R1-6 | Episode Timing chart uses a left/right double-bar per hour (hypo left, hyper right) with no in-chart legend — users infer the split from colors alone. | R1 Frontend Senior | FIX | OPEN |
+| R1-7 | Basal Delta chart lacks a Y-axis label; users must infer "U" from tick format (`0.50U`). Diurnal chart has a label; this one should too. | R1 Frontend Senior | FIX | OPEN |
+| R1-8 | `.cgm-wrap { min-width: 60% }` may conflict with narrow mobile viewports. Ambiguous — either remove the constraint or replace with `max-width` only. | R1 Frontend Senior | FIX | OPEN |
+| R2-4 | Missing validation for `episodeTiming.hypoHourly` / `hyperHourly` array shape before rendering. If `computeEpisodesWithHours` ever returns a partial object, D3 silently fails. **Merged R3-8.** | R2 Backend Senior (also R3-8) | FIX | OPEN |
+| R2-5 | Soft-grounding schema allows LLM to cite non-existent hotspots — schema enforces `0 ≤ hour ≤ 23` and signal enum, but doesn't require that the cited hotspot exists in `pumpActionStats.hotspots`. Renderer will render a link to nothing. | R2 Backend Senior | FIX | OPEN |
+| R3-4 | `client.translate` assumption is checked once at init, stored as a stale reference in the module singleton. Nightscout hot-reload or delayed init could leave `currentTranslate` undefined mid-render, producing `escapeHtml(undefined)` = `'undefined'`. Defensive: add inline `typeof` guard in `translate()` wrapper. | R3 Devil's Advocate | FIX | OPEN |
+| R3-5 | `renderInsightItem` assumes `item.text` is a string. If LLM sends `{text: null}` or `{text: 123}` the coerced output is wrong (displays `""` or `"123"`). Graceful degradation but indicates undetected schema violation — add runtime warning. | R3 Devil's Advocate | FIX | OPEN |
+| R3-7 | `fmt()` argument order fragility (val, unit, decimals) — positional args are easy to swap in future edits. No type safety. Consider options-object signature or explicit JSDoc `@param` contracts. | R3 Devil's Advocate | SKIP | OPEN |
+| R4-6 | *"No significant patterns detected — therapy appears stable for this period"* is a clinical claim the software shouldn't make. Software doesn't know if therapy is stable. Reword to a neutral observation: *"No pump adjustments beyond scheduled rates detected during this period."* Liability + UX. **Also R1 noted this as ambiguous.** | R4 End User (also R1-?) | FIX | OPEN |
+| R4-7 | "No pump data for this timeframe" notice is vague: doesn't explain which sections are hidden, why Insulin Distribution still renders below, or what "pump data" actually means (no basal events? no boluses?). | R4 End User | FIX | OPEN |
+| R4-8 | "Coverage: N of M days pump" badge: "coverage" is ambiguous domain term (data coverage? therapy coverage?). Consider prominent top-of-section callout with percentage + date range instead of inline badge. | R4 End User | FIX | OPEN |
+| R4-9 | User/Auto bolus split is confusing for non-Control-IQ users who'll see `auto = 0` everywhere. No help text explains this is Control-IQ / PLGS territory. | R4 End User | FIX | OPEN |
+| R5-1 | **R4-5 from plan (validation_warnings) not implemented.** Plan required `computePumpActionStats` to return `validation_warnings: string[]` for malformed treatments, and the renderer to show an alert icon with count + tooltip. Neither is present. Plan-scoped gap. | R5 Product Manager | FIX | OPEN |
+| R5-2 | **R1-S3 from plan (JSDoc @example blocks) incomplete.** Plan required `@example` blocks on every new exported function in `lib/statistics.js`. Only 3/14 have them. | R5 Product Manager | FIX | OPEN |
+| R5-3 | **Phase B/C documentation not updated.** Plan required `ai_evaluation.md` updates covering the pump-action pipeline, insulin-accounting model, pump-coverage handling, admin thresholds (R3-9), travel-day artifact (R3-10), single-profile limitation (R3-11). Not done. | R5 Product Manager | FIX | OPEN |
+| R5-4 | **R3-11 from plan (profile_switch_detected flag) not implemented.** Plan explicitly required a one-line check that surfaces `pump_action_stats.profile_switch_detected = true` when treatments contain a Profile Switch event, so the renderer can show "profile switch detected — basal delta may be approximate". Not deferred — plan kept this as an in-scope mitigation. | R5 Product Manager | FIX | OPEN |
+
+---
+
+### Suggestions
+| ID | Details | Flagged By | Handling | Status |
+|----|---------|-----------|----------|--------|
+| R1-9 | Expand chart `aria-label` beyond section titles — add a one-line summary or use `<desc>` children for screen readers ("Pump Action Hotspots: hourly pump intervention frequency with episode overlay"). | R1 Frontend Senior | DEFER | OPEN |
+| R1-10 | "Loading chart…" static text could be a CSS pulse/skeleton loader for perceived responsiveness. | R1 Frontend Senior | SKIP | OPEN |
+| R1-11 | `<details>` open state not persisted across reloads — users re-expand every time. Use sessionStorage. | R1 Frontend Senior | DEFER | OPEN |
+| R1-12 | Treatment insight grounding badges have `title` on `<li>` parent, not on the `<span>` badge itself — tooltips may not fire on badge hover. Move `title` to the span. | R1 Frontend Senior | FIX | OPEN |
+| R1-13 | SVG text sizing should scale with viewport width — dynamic `font-size: width < 600 ? '14px' : '10px'`. | R1 Frontend Senior | DEFER | OPEN |
+| R2-7 | Data-quality note threshold (`< 50%` pump coverage) — consider showing the note whenever `pump_days < total_days` so mixed-coverage weeks always get the disclosure. | R2 Backend Senior | DEFER | OPEN |
+| R2-8 | `renderInsightList` doesn't handle non-array inputs — schema should prevent it but `Array.isArray` guard is cheap insurance. | R2 Backend Senior | FIX | OPEN |
+| R2-9 | `BASAL_LANG_RE` inference is duplicated across legacy-string and object branches of `renderInsightItem` — extract to a helper or add a comment. | R2 Backend Senior | SKIP | OPEN |
+| R2-10 | `computePumpActionStats` contract not documented — callers must check `profile_valid` before trusting `basal_actual` numbers. Add JSDoc note. | R2 Backend Senior | FIX | OPEN |
+| R2-11 | `computeEpisodesWithHours` uses `Math.max(1, keys.length)` to avoid divide-by-zero, which silently leaves raw totals when input is empty. Return the all-zero shape on empty input instead. | R2 Backend Senior | FIX | OPEN |
+| R2-12 | `renderInsightItem` doesn't range-check `ref.hour` — schema enforces 0–23 but defensive `ref.hour >= 0 && ref.hour <= 23` check would prevent malformed LLM responses leaking through. | R2 Backend Senior | FIX | OPEN |
+| R3-9 | Hardcoded color palette scattered across ~15 locations — extract to a `COLORS` constant for future colorblind mode. | R3 Devil's Advocate | DEFER | OPEN |
+| R3-10 | `renderInsulinLegend` builds HTML via string concat with `no-unsanitized/method` disable — inconsistent with rest of codebase that uses D3 style() method. Consider CSS classes for legend swatches. | R3 Devil's Advocate | SKIP | OPEN |
+| R3-11 | No `requestAnimationFrame` fallback — negligible for 2026 browsers. | R3 Devil's Advocate | SKIP | OPEN |
+| R3-12 | No automated test that every `translate('X')` call has a corresponding en.json entry. Dead keys undetected. | R3 Devil's Advocate | DEFER | OPEN |
+| R3-13 | No concurrency tests for the module-level singleton — the R3-1 race condition wasn't caught by existing tests. | R3 Devil's Advocate | DEFER | OPEN |
+| R4-10 | Five chart sections + three collapsed tables = visual overwhelm for first-time users. Add a brief "Pump Automation Analysis" intro header explaining what the section is about. | R4 End User | FIX | OPEN |
+| R4-11 | Insulin legend is rendered below the chart — consider moving above as a caption so users see the color key before parsing stacked areas. | R4 End User | DEFER | OPEN |
+| R4-12 | Episode Timing dashed outline convention ("hours with recurring episodes") is not self-evident — add a mini legend or tooltip. | R4 End User | DEFER | OPEN |
+| R4-13 | "Nutzer/Auto" vs "User/Auto" asymmetry in German vs English column header — pragmatic, no action needed. | R4 End User | SKIP | OPEN |
+
+---
+
+### Filtered
+| ID | Original claim | Evidence | Status |
+|----|----------------|----------|--------|
+| R2-1 | "XSS vulnerability in renderInsulinLegend items.join()" — flagged CRITICAL | LOW CONFIDENCE — all `items` entries are built via `escapeHtml()` before concatenation (renderer.js:283-326). The `no-unsanitized/method` disable is already present on the return line. This is a style-consistency concern, not an XSS hole. Reviewer acknowledged "all values ARE escaped" in the details. | FILTERED |
+| R2-6 | "Missing translation key 'Coverage: %1 of %2 days pump'" | LOW CONFIDENCE — the key IS present in both `translations/en/en.json` and `translations/de_DE.json` (added in this commit). Reviewer missed the translations diff. | FILTERED |
+| R3-6 | "D3 module reference in Node test env may fail" | LOW CONFIDENCE — charts.js is never imported by statistics.js or any server-side path. Node tests don't load charts.js. Reviewer noted this themselves: "this is not an issue in this codebase". | FILTERED |
+
+---
+
+### Recommendation
+
+**Critical count: 11 → Needs changes.** The delivery is functionally sound and passes 95 tests, but the user-visible output is not ready to ship.
+
+**Top actions (highest leverage):**
+1. **Ship CSS for the new elements** (R1-1, R1-2, R1-3). This single fix unblocks R4-3 (details affordance), makes grounding badges visible, and probably catches the mobile responsiveness issue.
+2. **Rework the user-facing copy** (R4-1, R4-4, R4-6): rename/subtitle "Pump Action Hotspots" and "Basal Delta", soften the data-quality callout, and remove the "therapy appears stable" clinical claim.
+3. **Add defensive null guards** (R3-3, R2-2, R2-4, R3-2, R3-1) before merging — five small hardening changes that prevent silent failure modes and race conditions.
+
+Phase D work (prompt contract, LLM grounding feedback) remains correctly out of scope.
+

@@ -94,6 +94,7 @@ Some simple rules that will make it easier to maintain our codebase:
     , time: Date.now()
   };
   ```
+* Prefix intentionally unused function parameters and caught errors with an underscore (e.g., `function init (_ctx) { ... }`, `catch (_err) { ... }`). This satisfies the `no-unused-vars` ESLint rule's `argsIgnorePattern: '^_'` / `caughtErrorsIgnorePattern: '^_'` configuration for signature-required-but-unused parameters (such as the `ctx` argument every plugin's `init` function must accept).
 
 If in doubt, format your code with `js-beautify --indent-size 2 --comma-first  --keep-array-indentation`
 

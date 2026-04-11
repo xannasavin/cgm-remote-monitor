@@ -1,10 +1,12 @@
 module.exports = {
     'plugins': [
-      'security'
+      'security',
+      'no-unsanitized'
     ],
     'extends': [
       'eslint:recommended',
-      'plugin:security/recommended'
+      'plugin:security/recommended',
+      'plugin:no-unsanitized/DOM'
     ],
     'parser': 'babel-eslint',
     'env': {
@@ -15,12 +17,17 @@ module.exports = {
       'mocha': true,
       'jquery': true
     },
+    'globals': {
+      'globalThis': 'readonly'
+    },
     'rules': {
       'security/detect-object-injection' : 0,
       'no-unused-vars': [
         'error',
         {
-          'varsIgnorePattern': 'should|expect'
+          'varsIgnorePattern': 'should|expect',
+          'argsIgnorePattern': '^_',
+          'caughtErrorsIgnorePattern': '^_'
         }
       ]
     },
