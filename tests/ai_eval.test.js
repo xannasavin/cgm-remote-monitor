@@ -220,6 +220,67 @@ describe('ai_eval plugin', function () {
         renderer.should.have.property('renderCgmReport').which.is.a.Function();
       });
     });
+
+    describe('sanitizeEvidenceText', function () {
+      it('rewrites 13-digit epoch-ms runs to dd.mm.yyyy HH:MM', function () {
+        var ms = Date.UTC(2026, 3, 5, 12, 30, 0); // 2026-04-05 12:30 UTC
+        var local = new Date(ms);
+        var pad = function (v) { return v < 10 ? '0' + v : '' + v; };
+        var expected = pad(local.getDate()) + '.' + pad(local.getMonth() + 1) + '.' + local.getFullYear()
+          + ' ' + pad(local.getHours()) + ':' + pad(local.getMinutes());
+        var out = renderer.sanitizeEvidenceText('episode at ' + ms + ' with peak 217');
+        out.should.equal('episode at ' + expected + ' with peak 217');
+      });
+
+      it('leaves normal numbers (mg/dL, counts, percentages) untouched', function () {
+        renderer.sanitizeEvidenceText('TIR 72%, peak 217 mg/dL, 8 episodes').should.equal('TIR 72%, peak 217 mg/dL, 8 episodes');
+      });
+
+      it('leaves numbers outside the epoch sanity window untouched', function () {
+        // 9999999999999 would parse to year ~2286 — rejected
+        renderer.sanitizeEvidenceText('big number 9999999999999').should.equal('big number 9999999999999');
+      });
+
+      it('returns non-strings unchanged', function () {
+        (renderer.sanitizeEvidenceText(null) === null).should.be.true();
+        (renderer.sanitizeEvidenceText(undefined) === undefined).should.be.true();
+        renderer.sanitizeEvidenceText('').should.equal('');
+      });
+    });
+
+    describe('sanitizeAnalysisStrings', function () {
+      it('walks the full analysis object and rewrites epoch-ms everywhere', function () {
+        var ms1 = Date.UTC(2026, 3, 5, 12, 30, 0);
+        var ms2 = Date.UTC(2026, 3, 6, 14, 0, 0);
+        var obj = {
+          summary: ['peak at ' + ms1]
+          , trends: [
+            { label: 'High at ' + ms1, evidence: 'from ' + ms1 + ' to ' + ms2, severity: 'warning' }
+          ]
+          , recommendations: {
+            therapy_settings: [ { action: 'a ' + ms1, rationale: 'r ' + ms2 } ]
+            , behavioral_timing: []
+            , monitoring: ['check ' + ms1]
+          }
+          , treatment_insights: {
+            carb_patterns: [ { text: 'meal at ' + ms1 } ]
+            , insulin_patterns: []
+            , basal_observations: []
+            , dosing_observations: []
+          }
+          , per_day: [ { date: '2026-04-05', notes: ['note ' + ms2] } ]
+          , data_quality_notes: ['gap at ' + ms1]
+        };
+        renderer.sanitizeAnalysisStrings(obj);
+        // After sanitization, no raw 13-digit run should remain anywhere.
+        JSON.stringify(obj).should.not.match(/\b\d{13}\b/);
+      });
+
+      it('is a no-op for null/undefined', function () {
+        renderer.sanitizeAnalysisStrings(null);
+        renderer.sanitizeAnalysisStrings(undefined);
+      });
+    });
   });
 
   describe('llm_client', function () {
