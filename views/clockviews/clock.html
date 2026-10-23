@@ -33,10 +33,40 @@
     <div id="inner" data-face="<%= face %>"<%-(face === 'config') ? 'data-face-config="cy10"' : '' %>>
     </div>
   </main>
+  <script type="text/javascript">
+    // TEMPORARY diagnostics for old devices: open the clock with ?diag to see
+    // load steps, request statuses and script errors on the page itself.
+    (function () {
+      if ((location.search || '').indexOf('diag') === -1) { return; }
+      var box = document.createElement('div');
+      box.id = 'diag';
+      box.setAttribute('style', 'position:fixed;left:0;right:0;bottom:0;max-height:60%;overflow:auto;' +
+        'z-index:99999;background:rgba(0,0,0,0.85);color:#fff;font:11px/1.3 monospace;' +
+        'white-space:pre-wrap;word-wrap:break-word;padding:4px;text-shadow:none;text-align:left');
+      document.body.appendChild(box);
+      var lines = 0;
+      function log (msg) {
+        if (lines > 60) { box.removeChild(box.firstChild); }
+        var t = new Date();
+        box.appendChild(document.createTextNode(t.getHours() + ':' + t.getMinutes() + ':' + t.getSeconds() + ' ' + msg + '\n'));
+        lines++;
+      }
+      window.__diag = log;
+      window.onerror = function (msg, src, line, col, err) {
+        log('ERROR ' + msg + ' @ ' + src + ':' + line + ':' + col + (err && err.stack ? '\n' + err.stack : ''));
+      };
+      log('UA ' + navigator.userAgent);
+      log('URL ' + location.pathname + location.search);
+    })();
+  </script>
   <script src="<%= locals.bundle %>/js/bundle.clock.js"></script>
 
   <script type="text/javascript">
     var clockFace = "<%= face  %>"; // can now be used in scripts
+    if (window.__diag) {
+      window.__diag('clock bundle executed: ' + (window.Nightscout && window.Nightscout.client ? 'yes' : 'NO') +
+        ', jQuery: ' + (window.$ ? 'yes' : 'NO'));
+    }
 
     var parts = (location.search || '?').substring(1).split('&');
     var token = '';
@@ -57,11 +87,41 @@
 
     var script = document.createElement('script');
     script.onload = function() {
+      if (window.__diag) {
+        window.__diag('status.js loaded, serverSettings: ' + (window.serverSettings ? 'yes' : 'NO'));
+        if (window.$) {
+          $(document).ajaxComplete(function (event, xhr, opts) {
+            window.__diag('AJAX ' + xhr.status + ' ' + String(opts.url).split('?')[0]);
+          });
+        }
+        var diagClient = window.Nightscout && window.Nightscout.client;
+        if (diagClient && diagClient.render) {
+          var diagRender = diagClient.render;
+          var diagRenders = 0;
+          diagClient.render = function () {
+            try {
+              diagRender.apply(this, arguments);
+              diagRenders++;
+              if (diagRenders <= 2) {
+                window.__diag('render ok #' + diagRenders + ', body bg=' + document.body.style.backgroundColor +
+                  ', sg=' + $('.sg').text());
+              }
+            } catch (e) {
+              window.__diag('RENDER EXCEPTION ' + e.message + (e.stack ? '\n' + e.stack : ''));
+              throw e;
+            }
+          };
+        } else {
+          window.__diag('Nightscout.client NOT available');
+        }
+      }
       window.Nightscout.client.init();
+      if (window.__diag) { window.__diag('init done'); }
     };
     // A refused script fires error, not load, and does not expose the status.
     // Ask once more to read it, and say so on a 401 instead of drawing nothing.
     script.onerror = function() {
+      if (window.__diag) { window.__diag('status.js FAILED to load'); }
       $.ajax(src, { dataType: 'text', error: function (xhr) {
         if (xhr && xhr.status === 401) {
           window.Nightscout.client.showNotAuthorized();
