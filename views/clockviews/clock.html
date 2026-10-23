@@ -59,7 +59,7 @@
       log('URL ' + location.pathname + location.search);
     })();
   </script>
-  <script src="<%= locals.bundle %>/js/bundle.clock.js"></script>
+  <script src="<%= locals.bundle %>/js/bundle.clock.js?v=<%= locals.cachebuster %>"></script>
 
   <script type="text/javascript">
     var clockFace = "<%= face  %>"; // can now be used in scripts
