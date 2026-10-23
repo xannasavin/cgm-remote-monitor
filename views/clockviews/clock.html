@@ -34,10 +34,13 @@
     </div>
   </main>
   <script type="text/javascript">
-    // TEMPORARY diagnostics for old devices: open the clock with ?diag to see
-    // load steps, request statuses and script errors on the page itself.
+    // On-page diagnostics for devices without a developer console (old iOS
+    // clocks, home screen web apps): add a `diag` parameter to the clock
+    // address (`?diag` or `&diag`) to see load steps, request statuses and
+    // script errors on the page itself. Without it nothing here runs.
+    // Keep this script ES5 so it still reports on the oldest devices.
     (function () {
-      if ((location.search || '').indexOf('diag') === -1) { return; }
+      if (!/(?:^\?|&)diag(?:=|&|$)/.test(location.search || '')) { return; }
       var box = document.createElement('div');
       box.id = 'diag';
       box.setAttribute('style', 'position:fixed;left:0;right:0;bottom:0;max-height:60%;overflow:auto;' +
@@ -126,6 +129,8 @@
         if (xhr && xhr.status === 401) {
           window.Nightscout.client.showNotAuthorized();
         }
+      }, complete: function (xhr) {
+        if (window.__diag) { window.__diag('status.js retry: HTTP ' + (xhr ? xhr.status : '?')); }
       } });
     };
     script.src = src;
