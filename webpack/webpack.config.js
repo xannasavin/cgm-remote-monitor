@@ -163,13 +163,6 @@ module.exports = {
     filename: 'js/bundle.[name].js',
     sourceMapFilename: 'js/bundle.[name].js.map',
     clean: true,
-    // Webpack >= 5.9x emits its module map as `{ 123(e,t,r){} }` whenever the
-    // browserslist targets allow method shorthand. Old iOS clock devices
-    // (iPhone 5, iOS 10) render the clock black with that output, while the
-    // previous ES5 form `{ 123: function(e,t,r){} }` works. Keep it ES5.
-    environment: {
-      methodShorthand: false
-    }
   },
   devtool: sourceMapType,
   optimization,
