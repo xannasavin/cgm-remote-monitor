@@ -5,7 +5,7 @@ LABEL maintainer="Nightscout Contributors"
 WORKDIR /opt/app
 
 # Copy only the files needed to install dependencies and build the webpack bundle.
-COPY package.json package-lock.json .babelrc ./
+COPY package.json package-lock.json .babelrc .browserslistrc ./
 COPY bundle/ ./bundle/
 COPY webpack/ ./webpack/
 COPY bin/generateRandomString.js ./bin/

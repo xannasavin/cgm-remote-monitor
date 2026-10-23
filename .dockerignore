@@ -26,25 +26,8 @@ Makefile
 Vagrantfile
 helm/
 .vscode/
-.browserslistrc
-.editorconfig
-.gitattributes
-README.md
-CONTRIBUTING.md
-COPYRIGHT
-LICENSE
-*.md
-
-# Development and CI/CD files
-.github/
-tests/
-testing/
-docs/
-Makefile
-Vagrantfile
-helm/
-.vscode/
-.browserslistrc
+# .browserslistrc must stay in the build context: Babel and webpack read the
+# supported browsers (incl. old iOS clock devices) from it during the bundle build.
 .editorconfig
 .gitattributes
 README.md
