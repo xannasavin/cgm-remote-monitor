@@ -35,6 +35,11 @@ npm run test-ci
 
 Tests require a MongoDB instance at `mongodb://127.0.0.1:27017/testdb` and an env file. See `tests/ci.test.env` for the required variables. Copy it to `my.test.env` for local runs.
 
+On Windows `TEST=bgnow npm run test-single` does not work (npm runs scripts through cmd, so `$TEST` is never expanded, even from Git Bash). Run the file directly instead; tests that do not touch the database also run without MongoDB:
+```bash
+npx env-cmd -f ./my.test.env mocha --timeout 5000 --require ./tests/hooks.js --exit ./tests/bgnow.test.js
+```
+
 ### Build & Lint
 ```bash
 npm run bundle          # Production webpack build
@@ -88,7 +93,10 @@ Required env vars: `MONGODB_URI` (or aliases: `MONGO_CONNECTION`, `MONGO`, `MONG
 
 ## Branch & PR Conventions
 
-- `master` = stable production; `dev` = development target
-- Branch naming: `wip/<feature-name>`
-- PRs target `dev` branch
+This repo is a personal fork (`origin`); `upstream` is the Nightscout project.
+
+- `master` = production and the default target: most work is developed on a feature branch and merged into `master`
+- `staging` = stage system for trying out changes before they go to production, used when a change needs testing in a live-like environment first
+- Branch naming: `wip/<feature-name>` (also `feat/`, `fix/`, `chore/` prefixes in use)
+- Upstream conventions (PRs target `dev`) apply only when contributing back to `upstream`
 - New features must live inside a Plugin
