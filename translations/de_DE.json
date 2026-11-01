@@ -776,6 +776,7 @@
     "Pump Analysis": "Pumpen-Analyse",
     "AI evaluation is not available: the AI_LLM_KEY environment variable is not set. All statistics on this page are calculated locally.": "KI-Auswertung nicht verfügbar: Die Umgebungsvariable AI_LLM_KEY ist nicht gesetzt. Alle Statistiken auf dieser Seite werden lokal berechnet.",
     "Pump analysis could not be computed for this period.": "Die Pumpen-Analyse konnte für diesen Zeitraum nicht berechnet werden.",
+    "Chart unavailable.": "Diagramm nicht verfügbar.",
     "AI Evaluation": "KI-Auswertung",
     "Charts and the full statistics for this period are in the Pump Analysis tab.": "Diagramme und die vollständige Statistik für diesen Zeitraum stehen im Tab Pumpen-Analyse.",
     "AI analysis is limited to 14 days. The statistics are in the Pump Analysis tab. Please reduce the date range to enable AI analysis.": "Die KI-Auswertung ist auf 14 Tage begrenzt. Die Statistik steht im Tab Pumpen-Analyse. Bitte den Zeitraum verkleinern, um die KI-Auswertung zu aktivieren."

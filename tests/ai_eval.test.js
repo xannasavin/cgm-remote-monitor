@@ -1024,6 +1024,32 @@ describe('ai_eval in the report page', function () {
     area.textContent.should.equal('');
   });
 
+  it('shows an error box and skips AI requests when the analysis throws', function () {
+    mount();
+    var fixture = buildStorage(2);
+    var original = analysisCache.getAnalysis;
+    var originalError = console.error;
+    var logged = [];
+    analysisCache.getAnalysis = function () { throw new Error('boom'); };
+    console.error = function () { logged.push(Array.prototype.slice.call(arguments)); };
+    try {
+      env.window.tempAiEvalReportData = { datastorage: fixture.ds, options: {}, sorteddaystoshow: fixture.days };
+      (function () { env.window.processAiEvaluationData(); }).should.not.throw();
+    } finally {
+      analysisCache.getAnalysis = original;
+      console.error = originalError;
+    }
+    var doc = env.window.document;
+    var area = doc.getElementById('aiAnalysisArea');
+    area.innerHTML.should.containEql('ai-section-error');
+    area.textContent.should.containEql('Pump analysis could not be computed for this period.');
+    doc.getElementById('sendToAiButton').disabled.should.be.true();
+    doc.getElementById('ai-system-prompt-status').textContent.should.equal('Skipped');
+    doc.getElementById('ai-user-prompt-status').textContent.should.equal('Skipped');
+    ajaxCalls.should.have.length(0);
+    logged.should.have.length(1);
+  });
+
   it('shows the 14-day warning and a neutral prompt status for long ranges', async function () {
     mount();
     var fixture = buildStorage(15);

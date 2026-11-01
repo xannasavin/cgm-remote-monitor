@@ -114,6 +114,18 @@ describe('pump_analysis', function () {
       });
     });
 
+    it('emits the daily TIR chart placeholder only for more than one day', function () {
+      var day = { average: 140, sd: 28, cv: 20, mage: 60, tir_pct: 72, tbr_pct: 5, tar_pct: 23
+        , hypo_episodes: [], hyper_episodes: [], total_readings: 288
+        , total_carbs: 0, total_insulin: 0, bolus_count: 0, carb_entries: 0 };
+      var one = statsRenderer.renderStats({}, [day], {}, ['2026-04-05']);
+      one.should.not.containEql('aiDailyTirChart');
+      one.should.containEql('Daily Breakdown');
+      one.should.containEql('Per-day table');
+      var two = statsRenderer.renderStats({}, [day, day], {}, ['2026-04-05', '2026-04-06']);
+      two.should.containEql('aiDailyTirChart');
+    });
+
     it('should format dates as dd.mm.yyyy in heading', function () {
       var html = statsRenderer.renderStats({}, [], { from: '2026-03-01', to: '2026-03-07' });
       html.should.containEql('01.03.2026');
@@ -245,6 +257,22 @@ describe('pump_analysis', function () {
         result.cgmData.days[0].stats.total_carbs.should.equal(30);
       });
 
+      it('exposes the first profile as raw_profile, or null without profiles', function () {
+        var p = { startDate: '2026-01-01', units: 'mg/dL', defaultProfile: 'D', store: { D: { basal: [], carbratio: [], sens: [], target_low: [], target_high: [] } } };
+        var withProfile = dataProcessor.prepareCgmData({
+          '2026-03-15': { sgv: [{ mills: 1710460800000, sgv: 120 }], treatments: [] }
+          , profiles: [p]
+          , alldays: 1
+        }, {}, {});
+        (withProfile.cgmData.raw_profile === p).should.be.true();
+        var without = dataProcessor.prepareCgmData({
+          '2026-03-15': { sgv: [{ mills: 1710460800000, sgv: 120 }], treatments: [] }
+          , profiles: []
+          , alldays: 1
+        }, {}, {});
+        (without.cgmData.raw_profile === null).should.be.true();
+      });
+
       describe('dayKeys filter', function () {
         // Shaped like the long-lived report datastorage: every day ever loaded
         // plus metadata keys.
@@ -371,6 +399,15 @@ describe('pump_analysis', function () {
       });
     });
 
+    it('css restores chart section spacing', function () {
+      plugin.css.should.containEql('.cgm-chart-section');
+    });
+
+    it('css gives AI error boxes a border', function () {
+      var rule = styles.REPORT_CSS.match(/\.ai-section-error\s*\{[^}]*\}/)[0];
+      rule.should.containEql('border:');
+    });
+
     it('report is a no-op without window', function () {
       (function () { plugin.report({}, [], {}); }).should.not.throw();
     });
@@ -453,6 +490,9 @@ describe('pump_analysis in the report page', function () {
 
   it('renders statistics into the tab without AI requests', async function () {
     var calls = [];
+    var errors = [];
+    var originalConsoleError = console.error;
+    console.error = function () { errors.push(Array.prototype.slice.call(arguments)); originalConsoleError.apply(console, arguments); };
     var $ = env.window.$;
     $.ajax = function (opts) { calls.push(typeof opts === 'string' ? opts : opts.url); };
     env.window.fetch = function (url) { calls.push(String(url)); return Promise.resolve({}); };
@@ -466,9 +506,41 @@ describe('pump_analysis in the report page', function () {
     };
     plugin.report(storage, ['2026-03-14', '2026-03-15'], { targetLow: 70, targetHigh: 180 });
     await wait(30);
+    console.error = originalConsoleError;
 
+    errors.should.have.length(0);
     env.window.document.getElementById('pumpAnalysisStatsArea').innerHTML.should.containEql('Time in Range');
     calls.filter(function (u) { return u.indexOf('/api/v1/ai_') !== -1; }).should.have.length(0);
+  });
+
+  it('replaces remaining chart skeletons when chart rendering throws', async function () {
+    var charts = require('../lib/report_plugins/pump_analysis/charts');
+    var originalError = console.error;
+    var logged = [];
+    mount({ settings: { ai_llm_key_is_set: false }, translate: identity });
+    var storage = {
+      '2026-03-14': { sgv: [{ mills: 1710460800000, sgv: 120 }, { mills: 1710461100000, sgv: 60 }], treatments: [] }
+      , '2026-03-15': { sgv: [{ mills: 1710547200000, sgv: 130 }, { mills: 1710547500000, sgv: 250 }], treatments: [] }
+      , profiles: []
+      , alldays: 2
+    };
+    var days = ['2026-03-14', '2026-03-15'];
+    var opts = { targetLow: 70, targetHigh: 180 };
+    var result = analysisCache.getAnalysis(storage, {}, opts, days);
+    var area = env.window.document.getElementById('pumpAnalysisStatsArea');
+    area.innerHTML = '<div class="cgm-chart-skeleton"></div><div class="cgm-chart-skeleton"></div>';
+    charts.renderDiurnalChart = function () { throw new Error('chart boom'); };
+    charts.renderInsulinDistributionChart = function () { throw new Error('chart boom'); };
+    charts.renderDailyTirChart = function () { throw new Error('chart boom'); };
+    console.error = function () { logged.push(Array.prototype.slice.call(arguments)); };
+    try {
+      plugin.renderCharts(result);
+    } finally {
+      console.error = originalError;
+    }
+    area.querySelectorAll('.cgm-chart-skeleton').length.should.equal(0);
+    area.textContent.should.containEql('Chart unavailable.');
+    logged.should.have.length(1);
   });
 
   it('shows an error box instead of throwing on malformed data', function () {
