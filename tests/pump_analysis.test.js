@@ -254,6 +254,71 @@ describe('pump_analysis', function () {
         result.cgmData.days[0].stats.total_insulin.should.equal(2);
         result.cgmData.days[0].stats.total_carbs.should.equal(30);
       });
+
+      describe('dayKeys filter', function () {
+        // Shaped like the long-lived report datastorage: every day ever loaded
+        // plus metadata keys.
+        function buildDatastorage () {
+          var ds = {
+            allstatsrecords: []
+            , alldays: 3
+            , treatments: []
+            , devicestatus: []
+            , profiles: []
+          };
+          ['2026-03-13', '2026-03-14', '2026-03-15'].forEach(function (day, i) {
+            ds[day] = { sgv: [{ mills: 1710460800000 + i * 86400000, sgv: 120 }], treatments: [] };
+          });
+          return ds;
+        }
+
+        it('only processes the day keys passed as dayKeys', function () {
+          var result = dataProcessor.prepareCgmData(buildDatastorage(), {}, {}, ['2026-03-14', '2026-03-15']);
+          result.dayCount.should.equal(2);
+          result.cgmData.meta.from.should.equal('2026-03-14');
+        });
+
+        it('processes all day keys when dayKeys is omitted', function () {
+          var result = dataProcessor.prepareCgmData(buildDatastorage(), {}, {});
+          result.dayCount.should.equal(3);
+        });
+      });
+    });
+  });
+
+  describe('analysis_cache', function () {
+    var analysisCache = require('../lib/report_plugins/pump_analysis/analysis_cache');
+    var datastorage;
+    var keys;
+
+    beforeEach(function () {
+      analysisCache.clear();
+      datastorage = {
+        '2026-03-14': { sgv: [{ mills: 1710460800000, sgv: 120 }], treatments: [] }
+        , '2026-03-15': { sgv: [{ mills: 1710547200000, sgv: 130 }], treatments: [] }
+        , profiles: []
+        , alldays: 2
+      };
+      keys = ['2026-03-14', '2026-03-15'];
+    });
+
+    it('returns the same object for the same dayKeys reference', function () {
+      var first = analysisCache.getAnalysis(datastorage, {}, {}, keys);
+      var second = analysisCache.getAnalysis(datastorage, {}, {}, keys);
+      first.should.equal(second);
+    });
+
+    it('recomputes for a new array with identical content', function () {
+      var first = analysisCache.getAnalysis(datastorage, {}, {}, keys);
+      var second = analysisCache.getAnalysis(datastorage, {}, {}, keys.slice());
+      first.should.not.equal(second);
+      second.dayCount.should.equal(first.dayCount);
+    });
+
+    it('does not cache without dayKeys', function () {
+      var first = analysisCache.getAnalysis(datastorage, {}, {});
+      var second = analysisCache.getAnalysis(datastorage, {}, {});
+      first.should.not.equal(second);
     });
   });
 });
