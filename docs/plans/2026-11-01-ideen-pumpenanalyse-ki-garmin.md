@@ -1,5 +1,13 @@
 # Ideen: Pumpen-Analyse, KI-Umbau, Garmin-Daten
 
+## 0. Offene technische Punkte (Stand 2026-11-01)
+
+- **Cache-Buster für `bundle.app.js`:** Nach einem Deploy kann der Browser das alte Bundle aus dem Cache nehmen (am 2026-11-01 passiert: Pumpen-Tab erst nach Cache-Leeren sichtbar). Fix wie beim Uhr-Fix `a800ca16`: in `views/index.html`, `reportindex.html`, `adminindex.html`, `profileindex.html`, `foodindex.html` `bundle.app.js?v=<%= locals.cachebuster %>` laden. Der Service Worker muss nicht angepasst werden (er fängt nur URLs ab, die exakt auf `/bundle/js/bundle.app.js` enden); seine Offline-Kopie wird dann nicht mehr genutzt. Prüfen: jede Seite lokal laden (`npm run test-local` bzw. Dev-Server gegen In-Memory-DB), Skript-URL trägt `?v=`, Bundle wird ausgeliefert.
+- **Browser-Check der Pumpen-Analyse automatisierbar machen:** Seed-Skript mit erfundenen CGM- und Pumpendaten (einige Wochen), Dev-Server gegen die In-Memory-MongoDB, dann Report mit und ohne `AI_LLM_KEY` im Browser prüfen.
+- **Profil nach dem Enddatum:** `datastorage.profiles[0]` kann ein Profil sein, das erst nach dem gewählten Zeitraum gilt (`lib/report/reportclient.js`, `loadProfilesRangeNext` mit `unshift`). Betrifft die Basal-Abweichung.
+- **Test-Hygiene:** In `tests/pump_analysis.test.js` ("replaces remaining chart skeletons when chart rendering throws") werden die werfenden Stubs auf den Chart-Funktionen nicht zurückgesetzt; in `finally` wiederherstellen.
+- **Windows-only Testfehler:** `dependency-brace-expansion` und `food-editor-touch-scroll` erwarten `/` statt `\` in Pfaden, `dependency-postcss` darf unter Windows keinen Symlink anlegen (`EPERM`). In der CI (Linux) unkritisch.
+
 Stand: 2026-11-01. Sammlung zum Nachdenken, keine beschlossenen Aufgaben. Umgesetzt wird aktuell nur die Aufteilung in die Tabs "Pumpen-Analyse" und "KI-Auswertung" (siehe `2026-11-01-pump-analysis-tab-split.md`).
 
 ## 1. Ausbau der Pumpen-Analyse (deterministisch, ohne LLM)
