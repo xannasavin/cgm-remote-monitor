@@ -13,6 +13,36 @@ describe('ai_eval plugin', function () {
       aiEval.should.have.property('css').which.is.a.String();
       aiEval.should.have.property('report').which.is.a.Function();
     });
+
+    it('css relies on pump_analysis for shared styles', function () {
+      var aiEval = require('../lib/report_plugins/ai_eval')({});
+      aiEval.css.should.not.containEql('.cgm-wrap');
+      aiEval.css.should.not.containEql('.ai-section-error {');
+      aiEval.css.should.containEql('#aiUsageStats ul');
+    });
+
+    it('html has the KPI mount and no statistics mount', function () {
+      var aiEval = require('../lib/report_plugins/ai_eval')({});
+      var html = aiEval.html({ settings: {} });
+      html.should.containEql('aiKpiArea');
+      html.should.containEql('sendToAiButton');
+      html.should.not.containEql('aiStatsArea');
+      html.should.containEql('Pump Analysis');
+    });
+
+    it('ai_eval neither renders charts nor prepares data itself', function () {
+      var fs = require('fs');
+      var path = require('path');
+      var src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'report_plugins', 'ai_eval.js'), 'utf8');
+      src.should.not.containEql('charts.render');
+      src.should.not.containEql('prepareCgmData(');
+    });
+
+    it('exceedsDayLimit is true above 14 days', function () {
+      var aiEval = require('../lib/report_plugins/ai_eval')({});
+      aiEval.exceedsDayLimit(14).should.be.false();
+      aiEval.exceedsDayLimit(15).should.be.true();
+    });
   });
 
   describe('schemas', function () {
@@ -671,35 +701,6 @@ describe('ai_eval plugin', function () {
       });
     });
 
-    describe('plugin isolation logic', function () {
-      // Note: can't test full report_plugins/index.js in Node (daytoday.js needs window).
-      // Instead, verify the isolation condition directly.
-
-      it('should evaluate isolation condition: true when ai_llm_key_is_set', function () {
-        var ctx = { settings: { ai_llm_key_is_set: true } };
-        (ctx.settings && ctx.settings.ai_llm_key_is_set).should.be.true();
-      });
-
-      it('should evaluate isolation condition: false when ai_llm_key_is_set is false', function () {
-        var ctx = { settings: { ai_llm_key_is_set: false } };
-        (!!( ctx.settings && ctx.settings.ai_llm_key_is_set)).should.be.false();
-      });
-
-      it('should evaluate isolation condition: false when settings empty', function () {
-        var ctx = { settings: {} };
-        (!!(ctx.settings && ctx.settings.ai_llm_key_is_set)).should.be.false();
-      });
-
-      it('should evaluate isolation condition: false when settings missing', function () {
-        var ctx = {};
-        (!!(ctx.settings && ctx.settings.ai_llm_key_is_set)).should.be.false();
-      });
-
-      it('ai_eval plugin should still load when called directly', function () {
-        var aiEval = require('../lib/report_plugins/ai_eval')({});
-        aiEval.should.have.property('name', 'ai_eval');
-      });
-    });
   });
 
   describe('formatDate', function () {
@@ -901,5 +902,140 @@ describe('ai_eval plugin', function () {
       var required = schemas.unified_response_format.json_schema.schema.required;
       required.should.containEql('treatment_insights');
     });
+  });
+});
+
+describe('ai_eval in the report page', function () {
+  var createSecureDOM = require('./fixtures/secure-jsdom').createSecureDOM;
+  var domGlobals = require('./fixtures/dom-globals');
+  var DOM_GLOBALS = ['window', 'document', 'navigator', '$', 'jQuery'];
+  var env;
+  var state;
+  var previousGlobals;
+  var aiEval;
+  var pumpAnalysis;
+  var analysisCache;
+  var ajaxCalls;
+
+  function identity (s) { return s; }
+
+  function clearPluginModules () {
+    Object.keys(require.cache).forEach(function (modulePath) {
+      if (modulePath.replace(/\\/g, '/').includes('/lib/report_plugins/')) {
+        delete require.cache[modulePath];
+      }
+    });
+  }
+
+  function wait (ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function buildStorage (dayCount) {
+    var ds = { profiles: [], alldays: dayCount };
+    var keys = [];
+    for (var i = 1; i <= dayCount; i++) {
+      var key = '2026-03-' + String(i).padStart(2, '0');
+      var base = Date.UTC(2026, 2, i, 8, 0, 0);
+      ds[key] = {
+        sgv: [
+          { mills: base, sgv: 120 }
+          , { mills: base + 300000, sgv: 60 }
+          , { mills: base + 600000, sgv: 250 }
+        ]
+        , treatments: []
+      };
+      keys.push(key);
+    }
+    return { ds: ds, days: keys };
+  }
+
+  beforeEach(function () {
+    previousGlobals = Object.fromEntries(DOM_GLOBALS.map(function (name) {
+      return [name, Object.getOwnPropertyDescriptor(global, name)];
+    }));
+    clearPluginModules();
+    env = createSecureDOM('<!DOCTYPE html><html><head></head><body><div id="host"></div></body></html>');
+    state = domGlobals.installDomGlobals(env);
+    analysisCache = require('../lib/report_plugins/pump_analysis/analysis_cache');
+    analysisCache.clear();
+    aiEval = require('../lib/report_plugins/ai_eval')({});
+    pumpAnalysis = require('../lib/report_plugins/pump_analysis')({});
+
+    ajaxCalls = [];
+    env.window.$.ajax = function (opts) {
+      ajaxCalls.push(opts.url);
+      if (/ai_settings\/prompts/.test(opts.url)) {
+        opts.success({ system_prompt: 'system', user_prompt_template: 'user' });
+      } else if (/check_limit/.test(opts.url)) {
+        opts.success({ limitExceeded: false });
+      }
+    };
+  });
+
+  afterEach(function () {
+    clearPluginModules();
+    domGlobals.restoreDomGlobals(state);
+    DOM_GLOBALS.forEach(function (name) {
+      if (previousGlobals[name]) {
+        Object.defineProperty(global, name, previousGlobals[name]);
+      } else {
+        delete global[name];
+      }
+    });
+  });
+
+  function mount () {
+    var client = { settings: { ai_llm_key_is_set: true }, translate: identity };
+    env.window.document.getElementById('host').innerHTML = aiEval.html(client);
+    env.window.initializeAiEvalTab(client);
+    return client;
+  }
+
+  it('reuses the pump analysis result and fills the KPI table', function () {
+    var client = mount();
+    pumpAnalysis.html(client);
+    var dataProcessor = require('../lib/report_plugins/pump_analysis/data_processor');
+    var original = dataProcessor.prepareCgmData;
+    var count = 0;
+    dataProcessor.prepareCgmData = function () {
+      count++;
+      return original.apply(this, arguments);
+    };
+    var fixture = buildStorage(3);
+    var opts = { targetLow: 70, targetHigh: 180 };
+    try {
+      pumpAnalysis.report(fixture.ds, fixture.days, opts);
+      env.window.tempAiEvalReportData = { datastorage: fixture.ds, options: opts, sorteddaystoshow: fixture.days };
+      env.window.processAiEvaluationData();
+    } finally {
+      dataProcessor.prepareCgmData = original;
+    }
+    count.should.equal(1);
+    env.window.document.getElementById('aiKpiArea').innerHTML.should.containEql('Time in Range');
+  });
+
+  it('report() clears the previous KPI table', function () {
+    mount();
+    var fixture = buildStorage(2);
+    var area = env.window.document.getElementById('aiKpiArea');
+    area.textContent = 'old table';
+    aiEval.report(fixture.ds, fixture.days, {});
+    area.textContent.should.equal('');
+  });
+
+  it('shows the 14-day warning and a neutral prompt status for long ranges', async function () {
+    mount();
+    var fixture = buildStorage(15);
+    aiEval.report(fixture.ds, fixture.days, {});
+    await wait(30);
+
+    var doc = env.window.document;
+    doc.getElementById('aiAnalysisArea').innerHTML.should.containEql('role="alert"');
+    doc.getElementById('sendToAiButton').disabled.should.be.true();
+    doc.getElementById('ai-system-prompt-status').textContent.should.equal('Skipped');
+    doc.getElementById('ai-user-prompt-status').textContent.should.equal('Skipped');
+    doc.getElementById('aiKpiArea').innerHTML.should.containEql('Time in Range');
+    ajaxCalls.should.have.length(0);
   });
 });

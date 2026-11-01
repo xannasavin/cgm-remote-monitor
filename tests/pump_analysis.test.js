@@ -166,7 +166,6 @@ describe('pump_analysis', function () {
 
         var result = dataProcessor.prepareCgmData(datastorage, {}, { targetLow: 70, targetHigh: 180 });
         result.dayCount.should.equal(1);
-        result.exceedsLimit.should.be.false();
         result.cgmData.days.should.have.length(1);
         result.cgmData.days[0].sgv.should.be.an.Array();
         result.cgmData.days[0].sgv[0].should.have.length(2); // [mills, sgv]
@@ -174,15 +173,6 @@ describe('pump_analysis', function () {
         result.cgmData.days[0].stats.should.have.property('tir_pct');
         result.periodStats.should.have.property('average');
         result.cgmData.meta.should.have.property('units', 'mg/dL');
-      });
-
-      it('should flag exceedsLimit for > 14 days', function () {
-        var datastorage = { profiles: [], alldays: 15 };
-        for (var i = 1; i <= 15; i++) {
-          datastorage['2026-03-' + String(i).padStart(2, '0')] = { sgv: [], treatments: [] };
-        }
-        var result = dataProcessor.prepareCgmData(datastorage, {}, {});
-        result.exceedsLimit.should.be.true();
       });
 
       it('should pass treatment notes as plain strings (outer JSON.stringify handles encoding)', function () {
