@@ -321,4 +321,194 @@ describe('pump_analysis', function () {
       first.should.not.equal(second);
     });
   });
+
+  describe('pump_analysis plugin', function () {
+    var fs = require('fs');
+    var path = require('path');
+    var statsRenderer = require('../lib/report_plugins/pump_analysis/stats_renderer');
+    var styles = require('../lib/report_plugins/pump_analysis/styles');
+    var plugin = require('../lib/report_plugins/pump_analysis')({});
+    function identity (s) { return s; }
+
+    it('exports name pump_analysis and label Pump Analysis', function () {
+      plugin.name.should.equal('pump_analysis');
+      plugin.label.should.equal('Pump Analysis');
+    });
+
+    it('css scopes list styles to .cgm-wrap', function () {
+      plugin.css.should.containEql('.cgm-wrap ul');
+      (/(^|\})\s*ul\s*\{/.test(styles.REPORT_CSS)).should.be.false();
+    });
+
+    it('shows an info hint when ai_llm_key_is_set is false', function () {
+      var html = plugin.html({ settings: { ai_llm_key_is_set: false }, translate: identity });
+      html.should.containEql('pumpAnalysisAiHint');
+      html.should.containEql('AI_LLM_KEY');
+      html.should.containEql('role="note"');
+      html.should.not.containEql('role="alert"');
+      html.should.not.containEql('ai-section-error');
+    });
+
+    it('has no AI hint when ai_llm_key_is_set is true', function () {
+      var html = plugin.html({ settings: { ai_llm_key_is_set: true }, translate: identity });
+      html.should.not.containEql('pumpAnalysisAiHint');
+      html.should.containEql('pumpAnalysisStatsArea');
+    });
+
+    it('html tolerates a client without settings', function () {
+      var html = plugin.html({ translate: identity });
+      html.should.containEql('pumpAnalysisAiHint');
+    });
+
+    it('never renders AI controls', function () {
+      [false, true].forEach(function (keySet) {
+        var html = plugin.html({ settings: { ai_llm_key_is_set: keySet }, translate: identity });
+        html.should.not.containEql('sendToAiButton');
+        html.should.not.containEql('aiAnalysisArea');
+      });
+    });
+
+    it('does not depend on ai_eval', function () {
+      var dir = path.join(__dirname, '..', 'lib', 'report_plugins');
+      var files = fs.readdirSync(path.join(dir, 'pump_analysis')).map(function (f) {
+        return path.join(dir, 'pump_analysis', f);
+      });
+      files.push(path.join(dir, 'pump_analysis.js'));
+      files.forEach(function (file) {
+        var src = fs.readFileSync(file, 'utf8');
+        (/require\([^)]*ai_eval/.test(src)).should.be.false();
+        src.should.not.containEql('/api/v1/ai_');
+      });
+    });
+
+    it('report is a no-op without window', function () {
+      (function () { plugin.report({}, [], {}); }).should.not.throw();
+    });
+
+    describe('renderPeriodSummary', function () {
+      var meta = { units: 'mg/dL' };
+      var p = { average: 140, median: 135, sd: 28, cv: 20, mage_overall: 60, tir_pct: 72, tbr_pct: 5, tar_pct: 23 };
+
+      it('renders the 8 period metrics', function () {
+        var html = statsRenderer.renderPeriodSummary(p, meta);
+        html.should.containEql('Time in Range');
+        html.should.containEql('MAGE');
+        var tbody = html.substring(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
+        tbody.match(/<tr>/g).should.have.length(8);
+      });
+
+      it('renderStats embeds renderPeriodSummary', function () {
+        var m = { from: '2026-03-01', to: '2026-03-07', days: 7, units: 'mg/dL' };
+        statsRenderer.renderStats(p, [], m).should.containEql(statsRenderer.renderPeriodSummary(p, m));
+      });
+    });
+  });
+});
+
+describe('pump_analysis in the report page', function () {
+  var createSecureDOM = require('./fixtures/secure-jsdom').createSecureDOM;
+  var domGlobals = require('./fixtures/dom-globals');
+  var DOM_GLOBALS = ['window', 'document', 'navigator', '$', 'jQuery'];
+  var env;
+  var state;
+  var previousGlobals;
+  var plugin;
+  var analysisCache;
+
+  function identity (s) { return s; }
+
+  function clearPluginModules () {
+    Object.keys(require.cache).forEach(function (modulePath) {
+      if (modulePath.replace(/\\/g, '/').includes('/lib/report_plugins/')) {
+        delete require.cache[modulePath];
+      }
+    });
+  }
+
+  function wait (ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  beforeEach(function () {
+    previousGlobals = Object.fromEntries(DOM_GLOBALS.map(function (name) {
+      return [name, Object.getOwnPropertyDescriptor(global, name)];
+    }));
+    clearPluginModules();
+    env = createSecureDOM(
+      '<!DOCTYPE html><html><head></head><body>'
+      + '<ul id="tabnav"></ul><div id="pluginchartplaceholders"></div>'
+      + '</body></html>'
+    );
+    state = domGlobals.installDomGlobals(env);
+    analysisCache = require('../lib/report_plugins/pump_analysis/analysis_cache');
+    analysisCache.clear();
+    plugin = require('../lib/report_plugins/pump_analysis')({});
+  });
+
+  afterEach(function () {
+    clearPluginModules();
+    domGlobals.restoreDomGlobals(state);
+    DOM_GLOBALS.forEach(function (name) {
+      if (previousGlobals[name]) {
+        Object.defineProperty(global, name, previousGlobals[name]);
+      } else {
+        delete global[name];
+      }
+    });
+  });
+
+  function mount (client) {
+    env.window.$('#pluginchartplaceholders').append(plugin.html(client));
+  }
+
+  it('renders statistics into the tab without AI requests', async function () {
+    var calls = [];
+    var $ = env.window.$;
+    $.ajax = function (opts) { calls.push(typeof opts === 'string' ? opts : opts.url); };
+    env.window.fetch = function (url) { calls.push(String(url)); return Promise.resolve({}); };
+
+    mount({ settings: { ai_llm_key_is_set: false }, translate: identity });
+    var storage = {
+      '2026-03-14': { sgv: [{ mills: 1710460800000, sgv: 120 }, { mills: 1710461100000, sgv: 60 }], treatments: [] }
+      , '2026-03-15': { sgv: [{ mills: 1710547200000, sgv: 130 }, { mills: 1710547500000, sgv: 250 }], treatments: [] }
+      , profiles: []
+      , alldays: 2
+    };
+    plugin.report(storage, ['2026-03-14', '2026-03-15'], { targetLow: 70, targetHigh: 180 });
+    await wait(30);
+
+    env.window.document.getElementById('pumpAnalysisStatsArea').innerHTML.should.containEql('Time in Range');
+    calls.filter(function (u) { return u.indexOf('/api/v1/ai_') !== -1; }).should.have.length(0);
+  });
+
+  it('shows an error box instead of throwing on malformed data', function () {
+    var original = analysisCache.getAnalysis;
+    var originalError = console.error;
+    var logged = [];
+    analysisCache.getAnalysis = function () { throw new Error('boom'); };
+    console.error = function () { logged.push(Array.prototype.slice.call(arguments)); };
+    try {
+      mount({ settings: {}, translate: identity });
+      (function () { plugin.report({}, ['2026-03-14'], {}); }).should.not.throw();
+    } finally {
+      analysisCache.getAnalysis = original;
+      console.error = originalError;
+    }
+    var html = env.window.document.getElementById('pumpAnalysisStatsArea').innerHTML;
+    html.should.containEql('ai-section-error');
+    html.should.containEql('Pump analysis could not be computed for this period.');
+    logged.should.have.length(1);
+  });
+
+  it('registers pump_analysis after loopalyzer, ai_eval only with a key', function () {
+    function names (keySet) {
+      var list = [];
+      require('../lib/report_plugins')({
+        settings: { ai_llm_key_is_set: keySet }, language: { translate: identity }
+      }).eachPlugin(function (p) { list.push(p.name); });
+      return list;
+    }
+    names(false).slice(-2).should.eql(['loopalyzer', 'pump_analysis']);
+    names(true).slice(-3).should.eql(['loopalyzer', 'pump_analysis', 'ai_eval']);
+  });
 });

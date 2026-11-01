@@ -748,5 +748,8 @@
     "Avg Daily User Bolus Insulin": "Avg Daily User Bolus Insulin",
     "Avg Daily Auto Bolus Insulin": "Avg Daily Auto Bolus Insulin",
     "Loading chart…": "Loading chart…",
-    "Charts unavailable": "Charts unavailable"
+    "Charts unavailable": "Charts unavailable",
+    "Pump Analysis": "Pump Analysis",
+    "AI evaluation is not available: the AI_LLM_KEY environment variable is not set. All statistics on this page are calculated locally.": "AI evaluation is not available: the AI_LLM_KEY environment variable is not set. All statistics on this page are calculated locally.",
+    "Pump analysis could not be computed for this period.": "Pump analysis could not be computed for this period."
 }

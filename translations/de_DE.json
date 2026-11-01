@@ -772,5 +772,8 @@
     "Insulin": "Insulin",
     "Loading chart\u2026": "Diagramm wird geladen\u2026",
     "No daily data available.": "Keine Tagesdaten verfügbar.",
-    "Charts unavailable": "Diagramme nicht verfügbar"
+    "Charts unavailable": "Diagramme nicht verfügbar",
+    "Pump Analysis": "Pumpen-Analyse",
+    "AI evaluation is not available: the AI_LLM_KEY environment variable is not set. All statistics on this page are calculated locally.": "KI-Auswertung nicht verfügbar: Die Umgebungsvariable AI_LLM_KEY ist nicht gesetzt. Alle Statistiken auf dieser Seite werden lokal berechnet.",
+    "Pump analysis could not be computed for this period.": "Die Pumpen-Analyse konnte für diesen Zeitraum nicht berechnet werden."
 }
