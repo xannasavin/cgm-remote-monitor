@@ -23,22 +23,22 @@ npm run prod
 
 ### Testing
 ```bash
-# Run full test suite (requires my.test.env + local MongoDB)
-npm test
+# Run full test suite against a throwaway in-memory MongoDB (no local MongoDB needed)
+npm run test-local
 
-# Run a single test file
-TEST=bgnow npm run test-single
+# Run selected test files the same way
+npm run test-local -- ./tests/bgnow.test.js ./tests/pump_analysis.test.js
+
+# Run full test suite against a real MongoDB at 127.0.0.1:27017
+npm test
 
 # CI tests with coverage
 npm run test-ci
 ```
 
-Tests require a MongoDB instance at `mongodb://127.0.0.1:27017/testdb` and an env file. See `tests/ci.test.env` for the required variables. Copy it to `my.test.env` for local runs.
+All runs need an env file: copy `tests/ci.test.env` to `my.test.env`. `npm run test-local` (`scripts/test-local.js`) starts MongoDB via `mongodb-memory-server-core` (version pinned in `package.json` under `config.mongodbMemoryServer`; the binary is downloaded once, ~370 MB, into a user-level cache such as `~/.cache/mongodb-binaries`) and overrides `CUSTOMCONNSTR_mongo` from the env file. Prefer it over `npm test` on machines without a MongoDB service.
 
-On Windows `TEST=bgnow npm run test-single` does not work (npm runs scripts through cmd, so `$TEST` is never expanded, even from Git Bash). Run the file directly instead; tests that do not touch the database also run without MongoDB:
-```bash
-npx env-cmd -f ./my.test.env mocha --timeout 5000 --require ./tests/hooks.js --exit ./tests/bgnow.test.js
-```
+On Windows `TEST=bgnow npm run test-single` does not work (npm runs scripts through cmd, so `$TEST` is never expanded, even from Git Bash). Use `npm run test-local -- ./tests/bgnow.test.js` instead.
 
 ### Build & Lint
 ```bash

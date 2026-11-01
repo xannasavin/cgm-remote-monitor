@@ -28,6 +28,7 @@
   "scripts": {
     "start": "node lib/server/server.js",
     "test": "env-cmd -f ./my.test.env mocha --timeout 5000 --require ./tests/hooks.js --exit ./tests/*.test.js",
+    "test-local": "node scripts/test-local.js",
     "test-single": "env-cmd -f ./my.test.env mocha --timeout 5000 --require ./tests/hooks.js --exit ./tests/$TEST.test.js",
     "test:core": "mocha --timeout 5000 --exit ./tests/client-core/**/*.test.js",
     "test:dependencies": "npm ls brace-expansion postcss mocha nanoid js-yaml eslint nyc dompurify socket.io-parser fast-uri ip-address d3 d3-color express body-parser socket.io socket.io-client engine.io engine.io-client socket.io-adapter ws axios @babel/core @babel/preset-env babel-loader jsdom uuid --all && mocha --timeout 5000 --exit ./tests/dependency-*.test.js",
@@ -74,6 +75,9 @@
     ]
   },
   "config": {
+    "mongodbMemoryServer": {
+      "version": "5.0.32"
+    },
     "blanket": {
       "pattern": [
         "tests",
@@ -172,6 +176,7 @@
     "eslint-webpack-plugin": "^2.7.0",
     "jsdom": "^26.1.0",
     "mocha": "^11.8.0",
+    "mongodb-memory-server-core": "11.3.0",
     "nodemon": "^3.1.14",
     "nyc": "^18.0.0",
     "should": "^13.2.3",
