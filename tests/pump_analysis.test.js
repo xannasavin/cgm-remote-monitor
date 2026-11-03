@@ -1174,3 +1174,207 @@ describe('pump_analysis meal response curves', function () {
     doc().getElementById('aiMealCurve_lunch').textContent.should.equal('Not enough data');
   });
 });
+
+describe('pump_analysis percentile bands and five ranges', function () {
+  var createSecureDOM = require('./fixtures/secure-jsdom').createSecureDOM;
+  var domGlobals = require('./fixtures/dom-globals');
+  var DOM_GLOBALS = ['window', 'document', 'navigator', '$', 'jQuery'];
+  var env;
+  var state;
+  var previousGlobals;
+  var charts;
+  var dist = require('../lib/report_plugins/pump_analysis/glucose_distribution');
+
+  function clearPluginModules () {
+    Object.keys(require.cache).forEach(function (modulePath) {
+      if (modulePath.replace(/\\/g, '/').includes('/lib/report_plugins/')) {
+        delete require.cache[modulePath];
+      }
+    });
+  }
+
+  beforeEach(function () {
+    previousGlobals = Object.fromEntries(DOM_GLOBALS.map(function (name) {
+      return [name, Object.getOwnPropertyDescriptor(global, name)];
+    }));
+    clearPluginModules();
+    env = createSecureDOM('<!DOCTYPE html><html><body><div id="chart"></div></body></html>');
+    state = domGlobals.installDomGlobals(env);
+    charts = require('../lib/report_plugins/pump_analysis/charts');
+    charts.setTranslate(function (s) { return s; });
+  });
+
+  afterEach(function () {
+    clearPluginModules();
+    domGlobals.restoreDomGlobals(state);
+    DOM_GLOBALS.forEach(function (name) {
+      if (previousGlobals[name]) {
+        Object.defineProperty(global, name, previousGlobals[name]);
+      } else {
+        delete global[name];
+      }
+    });
+  });
+
+  function doc () { return env.window.document; }
+
+  function hour8Readings () {
+    var list = [];
+    for (var v = 100; v <= 190; v += 10) list.push({ mills: 1000 + v, sgv: v, localHour: 8 });
+    return { '2026-03-14': list };
+  }
+
+  describe('hourlyPercentiles', function () {
+    it('interpolates percentiles linearly like d3.quantile', function () {
+      var out = dist.hourlyPercentiles(hour8Readings(), 0, 'mg/dl');
+      out.should.have.length(1);
+      out[0].hour.should.equal(8);
+      out[0].p50.should.equal(145);
+      out[0].p10.should.be.approximately(109, 1e-9);
+      out[0].p25.should.be.approximately(122.5, 1e-9);
+      out[0].p75.should.be.approximately(167.5, 1e-9);
+      out[0].p90.should.be.approximately(181, 1e-9);
+      out[0].n.should.equal(10);
+    });
+
+    it('converts the output to display units', function () {
+      var out = dist.hourlyPercentiles(hour8Readings(), 0, 'mmol');
+      out[0].p50.should.be.approximately(145 / 18.01559, 1e-9);
+    });
+
+    it('falls back to the utc offset when localHour is missing', function () {
+      var mills = Date.UTC(2026, 2, 14, 6, 30);
+      var out = dist.hourlyPercentiles({ d: [{ mills: mills, sgv: 120 }] }, 2 * 3600000, 'mg/dl');
+      out[0].hour.should.equal(8);
+    });
+
+    it('returns an empty list without readings', function () {
+      dist.hourlyPercentiles({}, 0, 'mg/dl').should.eql([]);
+      dist.hourlyPercentiles(null, 0).should.eql([]);
+    });
+  });
+
+  describe('dailyRanges', function () {
+    it('splits readings into five ranges with mg/dl limits', function () {
+      var out = dist.dailyRanges({ '2026-03-14': [
+        { sgv: 40 }, { sgv: 60 }, { sgv: 100 }, { sgv: 200 }, { sgv: 300 }
+      ] }, 70, 180);
+      out.should.have.length(1);
+      out[0].dateKey.should.equal('2026-03-14');
+      ['veryLow', 'low', 'inRange', 'high', 'veryHigh'].forEach(function (k) {
+        out[0][k].should.equal(20);
+      });
+    });
+
+    it('treats the boundaries as specified', function () {
+      var out = dist.dailyRanges({ d: [{ sgv: 54 }, { sgv: 70 }, { sgv: 180 }, { sgv: 250 }] }, 70, 180);
+      out[0].veryLow.should.equal(0);
+      out[0].low.should.equal(25);
+      out[0].inRange.should.equal(50);
+      out[0].high.should.equal(25);
+      out[0].veryHigh.should.equal(0);
+    });
+
+    it('skips days without readings', function () {
+      dist.dailyRanges({ a: [], b: [{ sgv: 100 }] }, 70, 180).map(function (r) { return r.dateKey; }).should.eql(['b']);
+    });
+  });
+
+  describe('renderDiurnalChart', function () {
+    function percentiles () {
+      var out = [];
+      for (var h = 0; h < 24; h++) out.push({ hour: h, p10: 90, p25: 105, p50: 120, p75: 150, p90: 180, n: 10 });
+      return out;
+    }
+    var meta = { units: 'mg/dL', target_low: 70, target_high: 180 };
+
+    it('draws two band paths and the median line', function () {
+      charts.renderDiurnalChart('#chart', percentiles(), meta);
+      doc().querySelectorAll('#chart path.cgm-diurnal-band').length.should.equal(2);
+      doc().querySelectorAll('#chart path.cgm-diurnal-median').length.should.equal(1);
+    });
+
+    it('shows the empty state without data', function () {
+      charts.renderDiurnalChart('#chart', [], meta);
+      doc().getElementById('chart').textContent.should.equal('Not enough data');
+      doc().getElementById('chart').innerHTML = '';
+      charts.renderDiurnalChart('#chart', undefined, meta);
+      doc().getElementById('chart').textContent.should.equal('Not enough data');
+    });
+  });
+
+  describe('renderDailyTirChart', function () {
+    var ranges = [
+      { dateKey: '2026-03-14', veryLow: 10, low: 10, inRange: 50, high: 20, veryHigh: 10 }
+      , { dateKey: '2026-03-15', veryLow: 0, low: 0, inRange: 100, high: 0, veryHigh: 0 }
+    ];
+
+    it('draws five segments for a day with all ranges and a five entry legend', function () {
+      charts.renderDailyTirChart('#chart', ranges, ['2026-03-14', '2026-03-15']);
+      doc().querySelectorAll('#chart rect.cgm-tir-seg').length.should.equal(6);
+      doc().querySelectorAll('#chart g.cgm-tir-legend rect').length.should.equal(5);
+      var legend = doc().querySelector('#chart g.cgm-tir-legend').textContent;
+      ['Very Low', 'Low', 'In Range', 'High', 'Very High'].forEach(function (label) {
+        legend.should.containEql(label);
+      });
+    });
+
+    it('uses distinct colours for the five ranges', function () {
+      var c = charts.COLORS;
+      var set = [c.rangeVeryLow, c.rangeLow, c.rangeInRange, c.rangeHigh, c.rangeVeryHigh];
+      set.forEach(function (v) { v.should.be.a.String(); });
+      new Set(set).size.should.equal(5);
+    });
+
+    it('shows the empty state without ranges', function () {
+      charts.renderDailyTirChart('#chart', undefined, []);
+      doc().getElementById('chart').textContent.should.equal('Not enough data');
+    });
+  });
+
+  describe('integration', function () {
+    it('renderCharts does not throw and shows the empty state without pumpExtras', function () {
+      var plugin = require('../lib/report_plugins/pump_analysis')({});
+      env.window.document.body.innerHTML = '<div id="pumpAnalysisStatsArea"><div id="aiDiurnalChart"></div><div id="aiDailyTirChart"></div></div>';
+      var day = { tir_pct: 50, tbr_pct: 10, tar_pct: 40 };
+      plugin.renderCharts({
+        cgmData: { days: [], meta: { units: 'mg/dL', target_low: 70, target_high: 180 } }
+        , periodStats: { diurnal_patterns: [{ hour: 8, avg: 130, sd: 10, days_with_data: 7 }] }
+        , dayStats: [day, day]
+      });
+      doc().getElementById('aiDiurnalChart').textContent.should.equal('Not enough data');
+      doc().getElementById('aiDailyTirChart').textContent.should.equal('Not enough data');
+    });
+
+    it('puts diurnalPercentiles and dailyRanges into pumpExtras only', function () {
+      var dataProcessor = require('../lib/report_plugins/pump_analysis/data_processor');
+      var storage = {
+        '2026-03-14': { sgv: [{ mills: 1710460800000, sgv: 120 }, { mills: 1710461100000, sgv: 60 }], treatments: [] }
+        , '2026-03-15': { sgv: [{ mills: 1710547200000, sgv: 130 }, { mills: 1710547500000, sgv: 250 }], treatments: [] }
+        , profiles: []
+        , alldays: 2
+      };
+      var result = dataProcessor.prepareCgmData(storage, {}, { targetLow: 70, targetHigh: 180 }, ['2026-03-14', '2026-03-15']);
+      result.pumpExtras.diurnalPercentiles.should.be.an.Array();
+      result.pumpExtras.diurnalPercentiles.length.should.be.above(0);
+      result.pumpExtras.dailyRanges.should.have.length(2);
+      JSON.stringify(result.cgmData).should.not.containEql('diurnalPercentiles');
+      JSON.stringify(result.periodStats).should.not.containEql('p90');
+    });
+
+    it('renders P25, Median and P75 in the hourly breakdown instead of Avg and SD', function () {
+      var statsRenderer = require('../lib/report_plugins/pump_analysis/stats_renderer');
+      var periodStats = { diurnal_patterns: [{ hour: 8, avg: 130, sd: 10, days_with_data: 7 }] };
+      var extras = { diurnalPercentiles: [{ hour: 8, p10: 100, p25: 110.5, p50: 120.5, p75: 140.5, p90: 160, n: 30 }] };
+      var html = statsRenderer.renderStats(periodStats, [], { units: 'mg/dL' }, [], null, null, extras);
+      var section = html.slice(html.indexOf('Hourly breakdown'));
+      section = section.slice(0, section.indexOf('</details>'));
+      section.should.containEql('P25');
+      section.should.containEql('Median');
+      section.should.containEql('P75');
+      section.should.containEql('110.5');
+      section.should.containEql('140.5');
+      section.should.not.containEql('SD');
+    });
+  });
+});
