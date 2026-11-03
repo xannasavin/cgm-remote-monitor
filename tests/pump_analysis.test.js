@@ -573,7 +573,7 @@ describe('pump_analysis', function () {
           tbody.match(/<tr>/g).should.have.length(9);
           var head = html.substring(html.indexOf('<thead>'), html.indexOf('</thead>'));
           head.match(/<th [^>]*>([^<]*)<\/th>/g).map(function (h) { return h.replace(/<[^>]*>/g, ''); })
-            .should.eql(['Metric', 'Value', 'Target', 'Meaning']);
+            .should.eql(['Metric', 'Value', 'Target value', 'Meaning']);
           html.should.containEql('GMI');
         });
 
@@ -587,6 +587,53 @@ describe('pump_analysis', function () {
 
         it('computes GMI from the average', function () {
           rowOf(ex({ average: 153.6 }), 'GMI').should.containEql('7.0 %');
+        });
+
+        it('fills the CV explanation from TARGETS instead of a hardcoded 36', function () {
+          rowOf(ex({}), '>CV<').should.containEql('Below 36 % is considered stable.');
+          rowOf(ex({}), '>CV<').should.not.containEql('%1');
+        });
+
+        it('shows - in the Meaning texts when target_low/high are missing', function () {
+          var html = ex({});
+          rowOf(html, 'Time in Range').should.containEql('Share of time between - and - mg/dL.');
+          rowOf(html, 'Time Below Range').should.containEql('Share of time below - mg/dL.');
+          rowOf(html, 'Time Above Range').should.containEql('Share of time above - mg/dL.');
+        });
+
+        it('uses the meta targets in the Meaning texts when present', function () {
+          var html = statsRenderer.renderPeriodSummary(p, { units: 'mg/dL', target_low: 70, target_high: 180 }, { explained: true });
+          rowOf(html, 'Time in Range').should.containEql('Share of time between 70 and 180 mg/dL.');
+        });
+
+        it('applies the status boundaries exactly', function () {
+          rowOf(ex({ tir_pct: 70 }), 'Time in Range').should.containEql('cgm-warn');
+          rowOf(ex({ tir_pct: 70.1 }), 'Time in Range').should.containEql('cgm-ok');
+          rowOf(ex({ tbr_pct: 4 }), 'Time Below Range').should.containEql('cgm-warn');
+          rowOf(ex({ tbr_pct: 3.9 }), 'Time Below Range').should.containEql('cgm-ok');
+          rowOf(ex({ tar_pct: 25 }), 'Time Above Range').should.containEql('cgm-warn');
+          rowOf(ex({ tar_pct: 24.9 }), 'Time Above Range').should.containEql('cgm-ok');
+          rowOf(ex({ cv: 36 }), '>CV<').should.containEql('cgm-ok');
+          rowOf(ex({ cv: 36.1 }), '>CV<').should.containEql('cgm-warn');
+          // GMI 7.0 % (average 153.6 mg/dl) is not below 7
+          rowOf(ex({ average: 153.6 }), 'GMI').should.containEql('cgm-warn');
+          rowOf(ex({ average: 140 }), 'GMI').should.containEql('cgm-ok');
+        });
+
+        it('leaves status cells uncolored when the value is missing', function () {
+          rowOf(ex({ tir_pct: null, cv: undefined }), 'Time in Range').should.not.match(/cgm-(ok|warn)/);
+          rowOf(ex({ tir_pct: null, cv: undefined }), '>CV<').should.not.match(/cgm-(ok|warn)/);
+        });
+
+        it('renders the mmol path: rough targets in mmol and GMI from the mmol average', function () {
+          var mmolMeta = { units: 'mmol', target_low: 3.9, target_high: 10 };
+          var mmolStats = { average: 8.0, median: 7.5, sd: 2.1, cv: 26, mage_overall: 3.5, tir_pct: 80, tbr_pct: 2, tar_pct: 18 };
+          var html = statsRenderer.renderPeriodSummary(mmolStats, mmolMeta, { explained: true });
+          rowOf(html, 'Standard Deviation').should.containEql('&lt; 2.8 (rough)');
+          rowOf(html, 'MAGE').should.containEql('&lt; 3.3 (rough)');
+          // 8.0 mmol = 144.1 mg/dl -> GMI 6.8 %
+          rowOf(html, 'GMI').should.containEql('6.8 %');
+          rowOf(html, 'Time in Range').should.containEql('Share of time between 3.9 and 10 mmol.');
         });
       });
 
@@ -717,25 +764,59 @@ describe('pump_analysis translations', function () {
   var root = path.join(__dirname, '..');
   var srcDir = path.join(root, 'lib', 'report_plugins', 'pump_analysis');
 
+  // Finds literal keys in translate('x'), translate("x"), translate('x', arg)
+  // and the same forms of sectionSubtitle(key) (passes its literal through
+  // translate) and textKey(key) (keys the recommendation engine returns
+  // untranslated). Not detected: keys built by concatenation or held in
+  // variables, e.g. translate('a' + b) or translate(key); keep those literal.
+  function extractKeys (src) {
+    // The lookbehind skips SVG transforms such as 'translate(' + x + ',0)'.
+    var re = /(?<!['"\w])(?:translate|sectionSubtitle|textKey)\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")\s*[,)]/g;
+    var out = [];
+    var m;
+    while ((m = re.exec(src)) !== null) {
+      var raw = m[1] !== undefined
+        ? m[1].replace(/\\'/g, '\'').replace(/"/g, '\\"')
+        : m[2];
+      out.push(JSON.parse('"' + raw + '"'));
+    }
+    return out;
+  }
+
   function collectKeys () {
     var files = fs.readdirSync(srcDir).filter(function (f) { return /\.js$/.test(f); }).map(function (f) {
       return path.join(srcDir, f);
     });
     files.push(path.join(root, 'lib', 'report_plugins', 'pump_analysis.js'));
-    // sectionSubtitle(key) passes its literal through translate(key);
-    // textKey(key) marks keys the recommendation engine returns untranslated
-    var re = /(?:translate|sectionSubtitle|textKey)\('((?:[^'\\]|\\.)*)'\)/g;
     var keys = {};
     files.forEach(function (file) {
-      var src = fs.readFileSync(file, 'utf8');
-      var m;
-      while ((m = re.exec(src)) !== null) {
-        var raw = m[1].replace(/\\'/g, '\'');
-        keys[JSON.parse('"' + raw.replace(/"/g, '\\"') + '"')] = path.basename(file);
-      }
+      extractKeys(fs.readFileSync(file, 'utf8')).forEach(function addKey (k) {
+        keys[k] = path.basename(file);
+      });
     });
     return keys;
   }
+
+  it('the key guard finds single, double quoted and argument forms', function () {
+    var src = 'translate(\'One\'); translate("Two"); translate(\'Three %1\', x); translate( "Four", y);'
+      + ' textKey(\'Five\'); sectionSubtitle("Six"); translate(\'It\\\'s\'); translate(\'a\' + b);'
+      + ' attr(\'transform\', \'translate(\' + x + \',0)\');';
+    extractKeys(src).should.eql(['One', 'Two', 'Three %1', 'Four', 'Five', 'Six', 'It\'s']);
+  });
+
+  it('uses a dedicated German key for the target column header', function () {
+    var de = loadJson('translations/de_DE.json');
+    de['Target value'].should.equal('Ziel');
+    de.Target.should.equal('Zielbereich');
+  });
+
+  it('no longer ships the unused Below Range / Above Range keys', function () {
+    ['translations/de_DE.json', 'translations/en/en.json', 'translations/lt_LT.json'].forEach(function (rel) {
+      var dict = loadJson(rel);
+      dict.should.not.have.property('Below Range');
+      dict.should.not.have.property('Above Range');
+    });
+  });
 
   function loadJson (rel) {
     return JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
@@ -1077,6 +1158,18 @@ describe('pump_analysis directional basal delta and hotspot units', function () 
     text.should.containEql('-0.01');
   });
 
+  it('skips the delta label for a null hour instead of showing 0.00', function () {
+    var perHour = [];
+    for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: h === 3 ? 0.8 : 0, direction: 1, signalDays: h === 3 ? 4 : 0 });
+    var delta = new Array(24).fill(0.2);
+    delta[3] = null;
+    charts.renderPumpActionHotspot('#chart', { perHour: perHour, hotspots: [3], pumpDays: 5, deltaUnitsPerHour: delta }, {});
+    var text = env.window.document.getElementById('chart').textContent;
+    text.should.containEql('4/5');
+    text.should.not.containEql('0.00');
+    text.should.not.containEql('+0.20');
+  });
+
   it('omits the delta row without deltaUnitsPerHour', function () {
     var perHour = [];
     for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: 0, direction: 1, signalDays: 0 });
@@ -1158,6 +1251,48 @@ describe('pump_analysis meal response curves', function () {
       slot: 'lunch', cases: cases, medianCurve: fr.medianCurve(cases), targetLow: 3.9, targetHigh: 10, units: 'mmol'
     });
     doc().querySelector('#chart .cgm-meal-summary').textContent.should.containEql('Median peak 11.7 mmol/L');
+  });
+
+  it('shows the available summary values when one median is missing', function () {
+    var cases = threeCases().map(function (c) { c.bg4h = null; return c; });
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: cases, medianCurve: fr.medianCurve(cases), targetLow: 70, targetHigh: 180, units: 'mg/dL'
+    });
+    var summary = doc().querySelector('#chart .cgm-meal-summary').textContent;
+    summary.should.containEql('Median peak 210 mg/dl after 60 min');
+    summary.should.containEql('4 h value - mg/dl (start 110 mg/dl)');
+    summary.should.containEql('3 meals');
+  });
+
+  it('hides the summary only when no median value is available', function () {
+    var cases = threeCases().map(function (c) {
+      c.peakBg = null; c.peakMin = null; c.bg4h = null; c.startBg = null; return c;
+    });
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: cases, medianCurve: fr.medianCurve(cases), targetLow: 70, targetHigh: 180, units: 'mg/dL'
+    });
+    (doc().querySelector('#chart .cgm-meal-summary') === null).should.be.true();
+  });
+
+  it('clips the curves at 240 minutes', function () {
+    var c = mealCase(0, 80);
+    c.curve.push({ min: 270, sgv: 90 }, { min: 300, sgv: 80 });
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: [c], medianCurve: [], targetLow: 70, targetHigh: 180, units: 'mg/dL'
+    });
+    var width = 900 - 24 - 50;
+    var d = doc().querySelector('#chart path.cgm-meal-line').getAttribute('d');
+    var xs = d.replace(/[MLC]/g, ' ').trim().split(/[\s,]+/).filter(function (v, i) { return i % 2 === 0; }).map(Number);
+    Math.max.apply(null, xs).should.be.belowOrEqual(width + 0.01);
+  });
+
+  it('translates the slot name in the aria label with the charts translate', function () {
+    charts.setTranslate(function (s) { return s === 'Lunch' ? 'Mittagessen' : s; });
+    var cases = threeCases();
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: cases, medianCurve: fr.medianCurve(cases), targetLow: 70, targetHigh: 180, units: 'mg/dL'
+    });
+    doc().querySelector('#chart svg').getAttribute('aria-label').should.containEql('Mittagessen');
   });
 
   it('renders the empty state for zero cases', function () {
@@ -1315,6 +1450,17 @@ describe('pump_analysis percentile bands and five ranges', function () {
       charts.renderDiurnalChart('#chart', percentiles(), meta);
       doc().querySelectorAll('#chart path.cgm-diurnal-band').length.should.equal(2);
       doc().querySelectorAll('#chart path.cgm-diurnal-median').length.should.equal(1);
+    });
+
+    it('leaves gaps for hours without data instead of joining or dropping', function () {
+      var withGap = percentiles().filter(function (p) { return p.hour < 6 || p.hour > 9; });
+      charts.renderDiurnalChart('#chart', withGap, meta);
+      var median = doc().querySelector('#chart path.cgm-diurnal-median').getAttribute('d');
+      (median.match(/M/g) || []).length.should.equal(2);
+      doc().querySelectorAll('#chart path.cgm-diurnal-band').forEach(function (p) {
+        (p.getAttribute('d').match(/M/g) || []).length.should.equal(2);
+      });
+      doc().querySelectorAll('#chart circle').length.should.equal(withGap.length);
     });
 
     it('shows the empty state without data', function () {
