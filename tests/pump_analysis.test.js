@@ -600,6 +600,109 @@ describe('pump_analysis', function () {
   });
 });
 
+describe('pump_analysis recommendations_renderer', function () {
+  var recRenderer = require('../lib/report_plugins/pump_analysis/recommendations_renderer');
+  var statsRenderer = require('../lib/report_plugins/pump_analysis/stats_renderer');
+  var engine = require('../lib/report_plugins/pump_analysis/recommendation_engine');
+  var FIXED_HINT = 'Calculation aid, not a therapy instruction. Change only one parameter at a time.';
+
+  function card (over) {
+    var c = {
+      kind: 'basal', state: 'up', confidence: 'high', timeLabel: '02:00-06:00'
+      , startHour: 2, caseCount: 11, sameDirShare: 0.9, counterDays: 0, allUnchanged: false
+      , rows: [
+        { from: '02:00', to: '04:00', oldValue: '0.60', newValue: '0.70', unit: 'U/h' }
+        , { from: '04:00', to: '06:00', oldValue: '0.55', newValue: '0.65', unit: 'U/h' }
+      ]
+      , reasons: [{ key: 'No hypo in this period', args: [] }, { key: 'Hypo on %1/%2 days', args: ['2', '14'] }]
+      , basisLine: { key: 'Data: %1 days, no pump basal data', args: ['14'] }
+    };
+    Object.keys(over || {}).forEach(function set (k) { c[k] = over[k]; });
+    return c;
+  }
+  function rec (cards, profileSwitch) {
+    return { cards: cards, basis: {}, profileSwitch: !!profileSwitch };
+  }
+
+  it('renders a basal suggestion with time, arrows, badge, reasons and data basis', function () {
+    var html = recRenderer.renderRecommendations(rec([card()]));
+    html.should.containEql('02:00-06:00');
+    html.should.containEql('0.60 → 0.70 U/h');
+    html.should.containEql('0.55 → 0.65 U/h');
+    html.should.containEql('rec-high');
+    html.should.containEql('Confidence high');
+    html.should.containEql('<li>No hypo in this period</li>');
+    html.should.containEql('<li>Hypo on 2/14 days</li>');
+    html.should.containEql('Data: 14 days, no pump basal data');
+  });
+
+  it('always renders the fixed hint, also without cards and for null', function () {
+    recRenderer.renderRecommendations(rec([card()])).should.containEql(FIXED_HINT);
+    recRenderer.renderRecommendations(rec([])).should.containEql(FIXED_HINT);
+    recRenderer.renderRecommendations(null).should.containEql(FIXED_HINT);
+  });
+
+  it('adds the profile switch hint only when profileSwitch is set', function () {
+    recRenderer.renderRecommendations(rec([], true)).should.containEql(engine.PROFILE_SWITCH_KEY);
+    recRenderer.renderRecommendations(rec([], false)).should.not.containEql(engine.PROFILE_SWITCH_KEY);
+  });
+
+  it('renders a warning card without an arrow suggestion', function () {
+    var html = recRenderer.renderRecommendations(rec([card({
+      state: 'warning', direction: 'up', confidence: 'warning'
+      , rows: [{ from: '02:00', to: '06:00', oldValue: '0.60', newValue: null, unit: 'U/h' }]
+    })]));
+    html.should.containEql('rec-warning');
+    html.should.containEql('0.60 U/h');
+    html.should.not.containEql('→');
+  });
+
+  it('shows unchanged rows without an arrow and a translated note', function () {
+    var html = recRenderer.renderRecommendations(rec([card({
+      allUnchanged: true
+      , rows: [{ from: '02:00', to: '06:00', oldValue: '0.11', newValue: '0.11', unit: 'U/h', unchanged: true }]
+    })]));
+    html.should.containEql('0.11 U/h, no change possible within 20 %');
+    html.should.not.containEql('→');
+  });
+
+  it('renders an insufficient card with Not enough data and no share', function () {
+    var html = recRenderer.renderRecommendations(rec([card({
+      state: 'insufficient', confidence: 'insufficient', sameDirShare: 0.8, rows: []
+    })]));
+    html.should.containEql('Not enough data');
+    html.should.containEql('rec-none');
+    html.should.not.containEql('80');
+  });
+
+  it('escapes reason and basis arguments', function () {
+    var html = recRenderer.renderRecommendations(rec([card({
+      reasons: [{ key: 'Hypo on %1/%2 days', args: ['<script>alert(1)</script>', '14'] }]
+      , basisLine: { key: 'Data: %1 days, no pump basal data', args: ['<b>x</b>'] }
+    })]));
+    html.should.containEql('&lt;script&gt;');
+    html.should.not.containEql('<script>');
+    html.should.not.containEql('<b>x</b>');
+  });
+
+  it('renderStats puts the cards after the intro and before the period statistics', function () {
+    var pumpActionStats = { basal_source: 'pump', coverage: { pump_days: 1, total_days: 1 } };
+    var html = statsRenderer.renderStats({}, [], {}, [], pumpActionStats, null, { recommendations: rec([card()]) });
+    var intro = html.indexOf('cgm-analysis-intro');
+    var cards = html.indexOf('rec-card');
+    var period = html.indexOf('Period Statistics');
+    intro.should.be.above(-1);
+    cards.should.be.above(intro);
+    period.should.be.above(cards);
+  });
+
+  it('renderStats without pumpExtras or with null recommendations renders no cards', function () {
+    statsRenderer.renderStats({}, [], {}).should.not.containEql('rec-card');
+    statsRenderer.renderStats({}, [], {}, [], null, null, null).should.not.containEql('rec-card');
+    statsRenderer.renderStats({}, [], {}, [], null, null, { recommendations: null }).should.not.containEql('rec-card');
+  });
+});
+
 describe('pump_analysis translations', function () {
   var fs = require('fs');
   var path = require('path');
