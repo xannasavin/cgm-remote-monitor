@@ -422,6 +422,31 @@ describe('ai_eval plugin', function () {
         payload.response_format.json_schema.should.have.property('name', 'CgmAnalysisSchema');
       });
 
+      it('should not leak pumpExtras from prepareCgmData into the prompts', function () {
+        var prepare = require('../lib/report_plugins/pump_analysis/data_processor').prepareCgmData;
+        var sgv = [];
+        for (var i = 0; i < 288; i++) sgv.push({ mills: 1710460800000 + i * 300000, sgv: 120 });
+        var result = prepare({
+          '2026-03-15': { sgv: sgv, treatments: [{ mills: 1710470000000, eventType: 'Meal Bolus', insulin: 4, carbs: 40 }] }
+          , profiles: []
+          , alldays: 1
+        }, {}, { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('pumpExtras');
+        var payload = dataProcessor.buildSinglePayload(
+          result.cgmData
+          , {
+            system_prompt: 'sys {{CGMDATA_JSON}} {{STATS_JSON}}'
+            , user_prompt_template: 'usr {{CGMDATA_JSON}} {{STATS_JSON}} {{PROFILE_JSON}} {{TREATMENT_SUMMARY}}'
+          }
+          , {}
+          , 'en'
+        );
+        var json = JSON.stringify(payload.messages);
+        ['pumpExtras', 'recommendations', 'mealCases', 'readingsByDayMgdl', 'basisLine'].forEach(function (k) {
+          json.should.not.containEql(k);
+        });
+      });
+
       it('should still replace {{RETURNFORMAT}} if a user-customised prompt uses it', function () {
         var payload = dataProcessor.buildSinglePayload(
           makeCgmData()

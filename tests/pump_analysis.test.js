@@ -366,6 +366,41 @@ describe('pump_analysis', function () {
         (without.cgmData.raw_profile === null).should.be.true();
       });
 
+      describe('pumpExtras', function () {
+        function thinDatastorage () {
+          var sgv = [];
+          for (var i = 0; i < 288; i++) sgv.push({ mills: 1710460800000 + i * 300000, sgv: 120 + (i % 10) });
+          return { '2026-03-15': { sgv: sgv, treatments: [] }, profiles: [], alldays: 1 };
+        }
+
+        it('gives only insufficient cards for 1 day without pump and carbs, without error', function () {
+          var result = dataProcessor.prepareCgmData(thinDatastorage(), {}, { targetLow: 70, targetHigh: 180 });
+          result.should.have.property('pumpExtras');
+          (result.pumpExtras.error === undefined).should.be.true();
+          var rec = result.pumpExtras.recommendations;
+          rec.cards.length.should.be.above(0);
+          rec.cards.forEach(function (c) { c.state.should.equal('insufficient'); });
+          rec.basis.days.should.equal(1);
+          rec.basis.pumpDays.should.equal(0);
+          result.pumpExtras.mealCases.should.eql([]);
+          result.pumpExtras.readingsByDayMgdl['2026-03-15'].length.should.equal(288);
+        });
+
+        it('keeps pumpExtras out of cgmData, periodStats and dayStats', function () {
+          var result = dataProcessor.prepareCgmData(thinDatastorage(), {}, {});
+          var json = JSON.stringify([result.cgmData, result.periodStats, result.dayStats]);
+          ['pumpExtras', 'mealCases', 'readingsByDayMgdl', 'basisLine'].forEach(function (k) {
+            json.should.not.containEql(k);
+          });
+        });
+
+        it('converts mmol readings to mg/dl for pumpExtras', function () {
+          var ds = { '2026-03-15': { sgv: [{ mills: 1710460800000, sgv: 13.9 }], treatments: [] }, profiles: [], alldays: 1 };
+          var result = dataProcessor.prepareCgmData(ds, {}, { units: 'mmol', targetLow: 3.9, targetHigh: 10 });
+          result.pumpExtras.readingsByDayMgdl['2026-03-15'][0].sgv.should.be.above(240);
+        });
+      });
+
       describe('dayKeys filter', function () {
         // Shaped like the long-lived report datastorage: every day ever loaded
         // plus metadata keys.
@@ -576,8 +611,9 @@ describe('pump_analysis translations', function () {
       return path.join(srcDir, f);
     });
     files.push(path.join(root, 'lib', 'report_plugins', 'pump_analysis.js'));
-    // sectionSubtitle(key) passes its literal through translate(key)
-    var re = /(?:translate|sectionSubtitle)\('((?:[^'\\]|\\.)*)'\)/g;
+    // sectionSubtitle(key) passes its literal through translate(key);
+    // textKey(key) marks keys the recommendation engine returns untranslated
+    var re = /(?:translate|sectionSubtitle|textKey)\('((?:[^'\\]|\\.)*)'\)/g;
     var keys = {};
     files.forEach(function (file) {
       var src = fs.readFileSync(file, 'utf8');

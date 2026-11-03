@@ -1082,4 +1082,286 @@ describe('pump_analysis recommendations', function () {
       });
     });
   });
+
+  describe('recommendation_engine', function () {
+    var fs = require('fs');
+    var path = require('path');
+    var engine = require('../lib/report_plugins/pump_analysis/recommendation_engine');
+
+    var MIN = 60 * 1000;
+    var OFFSET_MIN = 60; // local = UTC + 1h
+    var DAYS = 14;
+    var store = {
+      units: 'mg/dl'
+      , basal: [
+        { time: '00:00', value: 0.8 }
+        , { time: '02:00', value: 0.6 }
+        , { time: '06:00', value: 0.8 }
+      ]
+      , carbratio: [{ time: '00:00', value: 10 }]
+      , sens: [{ time: '00:00', value: 30 }]
+    };
+    var RAISE_WARNING = 'Pump often raises basal here, but hypo on %1/%2 days, clarify the cause first';
+    var DAWN = 'Dawn bolus on %1/%2 days not counted, avg %3 U';
+
+    function dayKey (dayIdx) {
+      var d = new Date(Date.UTC(2026, 9, 1 + dayIdx));
+      return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+    }
+    function at (dayIdx, hour, minute) {
+      return Date.UTC(2026, 9, 1 + dayIdx, hour, minute || 0) - OFFSET_MIN * MIN;
+    }
+    function tempBasal (dayIdx, hour, durationMin, rate) {
+      var ms = at(dayIdx, hour, 0);
+      return { eventType: 'Temp Basal', created_at: new Date(ms).toISOString(), mills: ms, absolute: rate, duration: durationMin, utcOffset: OFFSET_MIN };
+    }
+    function bolusAt (dayIdx, hour, minute, insulin, extra) {
+      var ms = at(dayIdx, hour, minute);
+      return Object.assign({ eventType: 'Correction Bolus', created_at: new Date(ms).toISOString(), mills: ms, utcOffset: OFFSET_MIN, insulin: insulin }, extra || {});
+    }
+    // Flat 130 every 5 min over the report days plus one day on each side;
+    // bgFn(dayIdx, hour, minute) may override a value.
+    function readings (bgFn) {
+      var byDay = {};
+      for (var di = -1; di <= DAYS; di++) {
+        var key = dayKey(di);
+        byDay[key] = [];
+        for (var m = 0; m < 24 * 60; m += 5) {
+          var h = Math.floor(m / 60);
+          var v = bgFn ? bgFn(di, h, m % 60) : undefined;
+          if (v === null) continue;
+          byDay[key].push({ mills: at(di, h, m % 60), sgv: v === undefined ? 130 : v });
+        }
+      }
+      return byDay;
+    }
+    function keys () {
+      var list = [];
+      for (var i = 0; i < DAYS; i++) list.push(dayKey(i));
+      return list;
+    }
+    function basalTreatments (rate) {
+      var list = [];
+      for (var di = 0; di < DAYS; di++) list.push(tempBasal(di, 2, 240, rate));
+      return list;
+    }
+    function input (opts) {
+      opts = opts || {};
+      return {
+        treatments: opts.treatments || basalTreatments(0.9)
+        , readingsByDay: opts.readingsByDay || readings()
+        , units: opts.units || 'mg/dl'
+        , dayKeys: keys()
+        , pumpDayKeys: opts.pumpDayKeys || keys()
+        , profile: {}
+        , profileStore: opts.profileStore || store
+        , dayStats: opts.dayStats || []
+        , targetLow: 70
+        , targetHigh: 180
+        , utcOffsetMin: OFFSET_MIN
+        , profileSwitch: !!opts.profileSwitch
+      };
+    }
+    function basalCards (result) {
+      return result.cards.filter(function isBasal (c) { return c.kind === 'basal'; });
+    }
+    function cardAt (result, label) {
+      return result.cards.filter(function match (c) { return c.timeLabel === label; })[0];
+    }
+    function reasonOf (card, key) {
+      return card.reasons.filter(function match (r) { return r.key === key; })[0];
+    }
+    function hypoOnDays (n, hour) {
+      var stats = [];
+      for (var di = 0; di < DAYS; di++) {
+        stats.push({ hypo_episodes: di < n ? [{ start: at(di, hour, 0), end: at(di, hour, 20), duration_min: 20, nadir: 60 }] : [] });
+      }
+      return stats;
+    }
+
+    describe('rateConfidence', function () {
+      [
+        [4, 1.0, 0, 'insufficient']
+        , [7, 0.75, 0, 'high']
+        , [7, 0.74, 0, 'medium']
+        , [5, 0.60, 0, 'medium']
+        , [5, 0.59, 0, 'low']
+        , [7, 0.9, 1, 'medium']
+        , [5, 0.5, 2, 'low']
+        , [9, 0.9, 3, 'warning']
+      ].forEach(function eachCase (c) {
+        it('should rate ' + c[0] + ' cases, share ' + c[1] + ', ' + c[2] + ' counter days as ' + c[3], function () {
+          engine.rateConfidence({ caseCount: c[0], sameDirShare: c[1], counterDays: c[2] }).should.equal(c[3]);
+        });
+      });
+
+      it('should downgrade medium to low with 2 counter days', function () {
+        engine.rateConfidence({ caseCount: 6, sameDirShare: 0.7, counterDays: 2 }).should.equal('low');
+      });
+    });
+
+    describe('findHighEpisodes', function () {
+      function series (values) {
+        return values.map(function toReading (v, i) { return { mills: at(0, 3, 0) + i * 5 * MIN, sgv: v }; });
+      }
+
+      it('should find a run above 250 lasting 20 min', function () {
+        var eps = engine.findHighEpisodes(series([200, 260, 262, 270, 265, 255, 200]), 250, 15);
+        eps.length.should.equal(1);
+        eps[0].start.should.equal(at(0, 3, 5));
+        eps[0].end.should.equal(at(0, 3, 25));
+      });
+
+      it('should ignore a run shorter than 15 min', function () {
+        engine.findHighEpisodes(series([200, 260, 262, 270, 200]), 250, 15).length.should.equal(0);
+      });
+
+      it('should split a run at a gap over 15 min', function () {
+        var r = series([260, 260, 260, 260]).concat([{ mills: at(0, 4, 0), sgv: 260 }, { mills: at(0, 4, 5), sgv: 260 }]);
+        engine.findHighEpisodes(r, 250, 15).length.should.equal(1);
+      });
+    });
+
+    describe('buildRecommendations', function () {
+      it('should warn on basal up 01-06 with hypo on 4/14 days at 03:00', function () {
+        var res = engine.buildRecommendations(input({ dayStats: hypoOnDays(4, 3) }));
+        var card = cardAt(res, '01:00-06:00');
+        card.kind.should.equal('basal');
+        card.state.should.equal('warning');
+        card.confidence.should.equal('warning');
+        reasonOf(card, RAISE_WARNING).args.should.eql(['4', '14']);
+        card.rows.forEach(function noNew (r) { (r.newValue === null).should.equal(true); });
+      });
+
+      it('should recommend basal up with high confidence without counter-signal', function () {
+        var res = engine.buildRecommendations(input());
+        var card = cardAt(res, '01:00-06:00');
+        card.state.should.equal('up');
+        card.confidence.should.equal('high');
+        card.rows.map(function vals (r) { return [r.from, r.to, r.oldValue, r.newValue]; }).should.eql([
+          ['01:00', '02:00', '0.80', '0.95']
+          , ['02:00', '06:00', '0.60', '0.70']
+        ]);
+        reasonOf(card, 'No hypo in this period').args.should.eql([]);
+        var pump = reasonOf(card, 'On %1/%2 days Control-IQ raised basal in this period, avg %3 U/h (%4 %)');
+        pump.args.should.eql(['14', '14', '+0.30', '+50']);
+        card.basisLine.key.should.equal('Data: %1 pump days, %2 clean fasting windows; %3 unclear boluses not evaluated');
+        card.basisLine.args.should.eql(['14', '56', '0']);
+      });
+
+      it('should downgrade a basal down card one level with values above 250 for 20 min on 1 day', function () {
+        var bg = function hyper (di, h, m) { return di === 0 && h === 3 && m >= 20 && m <= 40 ? 260 : undefined; };
+        var res = engine.buildRecommendations(input({ treatments: basalTreatments(0.3), readingsByDay: readings(bg) }));
+        var card = cardAt(res, '01:00-06:00');
+        card.state.should.equal('down');
+        card.confidence.should.equal('medium');
+        reasonOf(card, 'Values above %1 on %2/%3 days').args.should.eql(['250', '1', '14']);
+      });
+
+      it('should not count values above 190 but never above 250 as counter-signal', function () {
+        var bg = function high (di, h, m) { return di === 0 && h === 3 && m >= 20 && m <= 40 ? 200 : undefined; };
+        var res = engine.buildRecommendations(input({ treatments: basalTreatments(0.3), readingsByDay: readings(bg) }));
+        var card = cardAt(res, '01:00-06:00');
+        card.state.should.equal('down');
+        card.confidence.should.equal('high');
+        reasonOf(card, 'No values above %1 in this period').args.should.eql(['250']);
+      });
+
+      it('should add the dawn reason to a basal card in the morning window', function () {
+        var t = basalTreatments(0.9);
+        for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        var res = engine.buildRecommendations(input({ treatments: t }));
+        res.basis.dawnBoluses.should.equal(9);
+        reasonOf(cardAt(res, '01:00-06:00'), DAWN).args.should.eql(['9', '14', '1.2']);
+        basalCards(res).forEach(function eachCard (c) {
+          if (c.timeLabel !== '01:00-06:00') reasonOf(c, DAWN).args.should.eql(['9', '14', '1.2']);
+        });
+      });
+
+      it('should sort warnings and suggestions first, then ok, then insufficient', function () {
+        var res = engine.buildRecommendations(input({ dayStats: hypoOnDays(4, 3) }));
+        var groups = res.cards.map(function group (c) {
+          if (c.state === 'ok') return 1;
+          if (c.state === 'insufficient') return 2;
+          return 0;
+        });
+        groups.should.eql(groups.slice().sort());
+        res.cards[0].state.should.equal('warning');
+        res.cards[1].state.should.equal('ok');
+        res.cards[res.cards.length - 1].state.should.equal('insufficient');
+      });
+
+      it('should give 1 to 4 reasons with string args and a basis line on every card', function () {
+        var res = engine.buildRecommendations(input({ dayStats: hypoOnDays(1, 3) }));
+        res.cards.length.should.be.above(4);
+        res.cards.forEach(function eachCard (c) {
+          c.reasons.length.should.be.within(1, 4);
+          c.reasons.concat([c.basisLine]).forEach(function eachReason (r) {
+            r.key.should.be.a.String();
+            r.args.forEach(function str (a) { a.should.be.a.String(); });
+          });
+        });
+      });
+
+      it('should report the data basis and the profile switch flag', function () {
+        var res = engine.buildRecommendations(input({ profileSwitch: true }));
+        res.basis.days.should.equal(14);
+        res.basis.pumpDays.should.equal(14);
+        res.basis.fastingWindows.should.be.above(0);
+        res.basis.mealsWithCarbs.should.equal(0);
+        res.basis.unclearBoluses.should.equal(0);
+        res.profileSwitch.should.equal(true);
+      });
+
+      it('should give one insufficient basal card without pump data', function () {
+        var res = engine.buildRecommendations(input({ treatments: [], pumpDayKeys: [] }));
+        var basal = basalCards(res);
+        basal.length.should.equal(1);
+        basal[0].state.should.equal('insufficient');
+        basal[0].reasons[0].key.should.equal('No pump basal data, basal recommendations are not available');
+        res.cards.forEach(function eachCard (c) { c.state.should.equal('insufficient'); });
+      });
+
+      it('should convert mmol readings to mg/dl at the entry (13.9 mmol counts as above 240)', function () {
+        var bg = function mmol () { return 13.9; };
+        var byDay = readings(bg);
+        var t = [bolusAt(0, 14, 0, 2)];
+        var extras = engine.computePumpExtras(Object.assign(input({ treatments: t, pumpDayKeys: [], readingsByDay: byDay }), { units: 'mmol' }));
+        extras.readingsByDayMgdl[dayKey(0)][0].sgv.should.be.above(240);
+        byDay[dayKey(0)][0].sgv.should.equal(13.9);
+        extras.recommendations.basis.unclearBoluses.should.equal(0);
+        var mgdl = engine.computePumpExtras(input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg) }));
+        mgdl.recommendations.basis.unclearBoluses.should.equal(1);
+      });
+
+      it('should never throw on empty input', function () {
+        var res = engine.buildRecommendations({});
+        res.cards.length.should.be.above(0);
+        res.cards.forEach(function eachCard (c) { c.state.should.equal('insufficient'); });
+      });
+
+      it('should only use reason keys that exist in en, de_DE and lt_LT', function () {
+        var root = path.join(__dirname, '..');
+        var dicts = ['translations/en/en.json', 'translations/de_DE.json', 'translations/lt_LT.json'].map(function load (rel) {
+          return JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+        });
+        var t = basalTreatments(0.9);
+        for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        var results = [
+          engine.buildRecommendations(input({ treatments: t, dayStats: hypoOnDays(4, 3) }))
+          , engine.buildRecommendations(input({ treatments: t, dayStats: hypoOnDays(1, 3) }))
+          , engine.buildRecommendations(input({ treatments: [], pumpDayKeys: [] }))
+        ];
+        var used = [engine.PROFILE_SWITCH_KEY];
+        results.forEach(function eachResult (res) {
+          res.cards.forEach(function eachCard (c) {
+            c.reasons.concat([c.basisLine]).forEach(function eachReason (r) { used.push(r.key); });
+          });
+        });
+        used.forEach(function present (k) {
+          dicts.forEach(function inDict (d) { d.should.have.property(k); });
+        });
+      });
+    });
+  });
 });
