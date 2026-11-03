@@ -1246,7 +1246,41 @@ describe('pump_analysis recommendations', function () {
         var pump = reasonOf(card, 'On %1/%2 days Control-IQ raised basal in this period, avg %3 U/h (%4 %)');
         pump.args.should.eql(['14', '14', '+0.30', '+50']);
         card.basisLine.key.should.equal('Data: %1 pump days, %2 clean fasting windows; %3 unclear boluses not evaluated');
-        card.basisLine.args.should.eql(['14', '56', '0']);
+        // %2 = distinct days with a clean fasting window in the block's own hours
+        card.basisLine.args.should.eql(['14', '14', '0']);
+      });
+
+      it('should omit the pump reason when the pump did not move basal', function () {
+        // Pump runs the profile rate; BG rises 9 mg/dl/h from 02 to 06 (d +0.5
+        // with sens 30) and falls back from 06 to 10.
+        var bg = function drift (di, h, m) {
+          var t = h * 60 + m;
+          if (t >= 120 && t < 360) return 130 + (t - 120) * 9 / 60;
+          if (t >= 360 && t < 600) return 166 - (t - 360) * 9 / 60;
+          return 130;
+        };
+        var res = engine.buildRecommendations(input({ treatments: basalTreatments(0.6), readingsByDay: readings(bg) }));
+        var card = cardAt(res, '01:00-06:00');
+        card.state.should.equal('up');
+        card.reasons.forEach(function noPump (r) { r.key.should.not.match(/Control-IQ/); });
+      });
+
+      it('should keep the 1 h earlier hint when the reasons exceed the cap', function () {
+        // Fast-rise corrections at 01:30 on two days add a correction reason:
+        // pump, no hypo, dawn, correction and extension would be 5 reasons.
+        var t = basalTreatments(0.9);
+        for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        t.push(bolusAt(0, 1, 30, 1));
+        t.push(bolusAt(1, 1, 30, 1));
+        var bg = function rise (d, h, m) { return d <= 1 && h === 1 && m === 30 ? 140 : undefined; };
+        var res = engine.buildRecommendations(input({ treatments: t, readingsByDay: readings(bg) }));
+        var card = cardAt(res, '01:00-06:00');
+        card.state.should.equal('up');
+        card.reasons.length.should.equal(4);
+        reasonOf(card, 'Suggestion starts 1 h earlier because insulin acts with a delay').should.be.ok();
+        (reasonOf(card, 'On %1/%2 days correction in this period, avg %3 U') === undefined).should.equal(true);
+        reasonOf(card, DAWN).should.be.ok();
+        reasonOf(card, 'No hypo in this period').should.be.ok();
       });
 
       it('should downgrade a basal down card one level with values above 250 for 20 min on 1 day', function () {
