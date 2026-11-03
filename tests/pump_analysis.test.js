@@ -565,6 +565,55 @@ describe('pump_analysis', function () {
   });
 });
 
+describe('pump_analysis translations', function () {
+  var fs = require('fs');
+  var path = require('path');
+  var root = path.join(__dirname, '..');
+  var srcDir = path.join(root, 'lib', 'report_plugins', 'pump_analysis');
+
+  function collectKeys () {
+    var files = fs.readdirSync(srcDir).filter(function (f) { return /\.js$/.test(f); }).map(function (f) {
+      return path.join(srcDir, f);
+    });
+    files.push(path.join(root, 'lib', 'report_plugins', 'pump_analysis.js'));
+    // sectionSubtitle(key) passes its literal through translate(key)
+    var re = /(?:translate|sectionSubtitle)\('((?:[^'\\]|\\.)*)'\)/g;
+    var keys = {};
+    files.forEach(function (file) {
+      var src = fs.readFileSync(file, 'utf8');
+      var m;
+      while ((m = re.exec(src)) !== null) {
+        var raw = m[1].replace(/\\'/g, '\'');
+        keys[JSON.parse('"' + raw.replace(/"/g, '\\"') + '"')] = path.basename(file);
+      }
+    });
+    return keys;
+  }
+
+  function loadJson (rel) {
+    return JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+  }
+
+  function missingIn (rel) {
+    var keys = collectKeys();
+    var dict = loadJson(rel);
+    // en.json is keyed by the English source text; other languages map key -> value
+    return Object.keys(keys).filter(function (k) { return !Object.prototype.hasOwnProperty.call(dict, k); });
+  }
+
+  it('every translate key used by pump_analysis has a German entry', function () {
+    missingIn('translations/de_DE.json').should.eql([]);
+  });
+
+  it('every translate key used by pump_analysis has an English entry', function () {
+    missingIn('translations/en/en.json').should.eql([]);
+  });
+
+  it('every translate key used by pump_analysis has a Lithuanian entry', function () {
+    missingIn('translations/lt_LT.json').should.eql([]);
+  });
+});
+
 describe('pump_analysis in the report page', function () {
   var createSecureDOM = require('./fixtures/secure-jsdom').createSecureDOM;
   var domGlobals = require('./fixtures/dom-globals');
