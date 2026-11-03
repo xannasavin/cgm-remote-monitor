@@ -1365,8 +1365,33 @@ describe('pump_analysis percentile bands and five ranges', function () {
         , periodStats: { diurnal_patterns: [{ hour: 8, avg: 130, sd: 10, days_with_data: 7 }] }
         , dayStats: [day, day]
       });
-      doc().getElementById('aiDiurnalChart').textContent.should.equal('Not enough data');
+      // The diurnal chart is gated on pumpExtras.diurnalPercentiles (M4).
+      doc().getElementById('aiDiurnalChart').textContent.should.equal('');
       doc().getElementById('aiDailyTirChart').textContent.should.equal('Not enough data');
+    });
+
+    it('renders the diurnal chart from pumpExtras even when the legacy diurnal_patterns are empty (mmol)', function () {
+      var plugin = require('../lib/report_plugins/pump_analysis')({});
+      env.window.document.body.innerHTML = '<div id="pumpAnalysisStatsArea"><div id="aiDiurnalChart"></div></div>';
+      var percentiles = [];
+      for (var h = 0; h < 24; h++) percentiles.push({ hour: h, p10: 5, p25: 5.8, p50: 6.7, p75: 8.3, p90: 10, n: 10 });
+      plugin.renderCharts({
+        cgmData: { days: [], meta: { units: 'mmol', target_low: 3.9, target_high: 10 } }
+        , periodStats: { diurnal_patterns: [] }
+        , dayStats: []
+        , pumpExtras: { diurnalPercentiles: percentiles }
+      });
+      doc().querySelectorAll('#aiDiurnalChart path.cgm-diurnal-median').length.should.equal(1);
+    });
+
+    it('gates the diurnal section on pumpExtras.diurnalPercentiles, not on diurnal_patterns', function () {
+      var statsRenderer = require('../lib/report_plugins/pump_analysis/stats_renderer');
+      var extras = { diurnalPercentiles: [{ hour: 8, p10: 5, p25: 5.8, p50: 6.7, p75: 8.3, p90: 10, n: 30 }] };
+      var shown = statsRenderer.renderStats({ diurnal_patterns: [] }, [], { units: 'mmol' }, [], null, null, extras);
+      shown.should.containEql('id="aiDiurnalChart"');
+      shown.should.containEql('Hourly breakdown');
+      var legacyOnly = statsRenderer.renderStats({ diurnal_patterns: [{ hour: 8, avg: 130, sd: 10, days_with_data: 7 }] }, [], { units: 'mg/dl' }, [], null, null, {});
+      legacyOnly.should.not.containEql('id="aiDiurnalChart"');
     });
 
     it('puts diurnalPercentiles and dailyRanges into pumpExtras only', function () {
