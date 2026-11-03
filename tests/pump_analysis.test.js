@@ -529,6 +529,9 @@ describe('pump_analysis in the report page', function () {
     var result = analysisCache.getAnalysis(storage, {}, opts, days);
     var area = env.window.document.getElementById('pumpAnalysisStatsArea');
     area.innerHTML = '<div class="cgm-chart-skeleton"></div><div class="cgm-chart-skeleton"></div>';
+    var originalDiurnal = charts.renderDiurnalChart;
+    var originalDistribution = charts.renderInsulinDistributionChart;
+    var originalDailyTir = charts.renderDailyTirChart;
     charts.renderDiurnalChart = function () { throw new Error('chart boom'); };
     charts.renderInsulinDistributionChart = function () { throw new Error('chart boom'); };
     charts.renderDailyTirChart = function () { throw new Error('chart boom'); };
@@ -537,6 +540,9 @@ describe('pump_analysis in the report page', function () {
       plugin.renderCharts(result);
     } finally {
       console.error = originalError;
+      charts.renderDiurnalChart = originalDiurnal;
+      charts.renderInsulinDistributionChart = originalDistribution;
+      charts.renderDailyTirChart = originalDailyTir;
     }
     area.querySelectorAll('.cgm-chart-skeleton').length.should.equal(0);
     area.textContent.should.containEql('Chart unavailable.');
