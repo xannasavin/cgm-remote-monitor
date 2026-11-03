@@ -402,6 +402,60 @@ describe('pump_analysis recommendations', function () {
         c.d.should.be.approximately((0.9 + 0.3) / 0.6 - 1, 1e-6);
       });
 
+      describe('dawn insulin (R22)', function () {
+        // Day 0: BG falls 9 mg/dl/h from 06:00 to 10:00, which is exactly the
+        // effect of 1.2 U spread over 4 h (0.3 U/h x sens 30).
+        function dawnDrop (di, h, m) {
+          var t = h * 60 + m;
+          if (di !== 0 || t < 360 || t > 600) return 130;
+          return 130 - (t - 360) * 9 / 60;
+        }
+        // Day 0: BG rises 9 mg/dl/h from 06:00 to 08:00.
+        function dawnRise (di, h, m) {
+          var t = h * 60 + m;
+          if (di !== 0 || t < 360 || t > 480) return 130;
+          return 130 + (t - 360) * 9 / 60;
+        }
+        var dawn = bolusAt(0, 6, 0, 1.2);
+
+        it('should give |d| < 10 % when BG falls by exactly the dawn insulin effect', function () {
+          var cases = run({ treatments: baseTreatments().concat([dawn]), readingsByDay: readings(dawnDrop) });
+          [6, 7, 8, 9].forEach(function eachHour (h) {
+            Math.abs(find(cases, 0, h).d).should.be.below(0.1);
+          });
+        });
+
+        it('should still give down for the same drop without a dawn bolus', function () {
+          var cases = run({ readingsByDay: readings(dawnDrop) });
+          [6, 7, 8, 9].forEach(function eachHour (h) {
+            find(cases, 0, h).d.should.be.approximately(-0.3 / 0.8, 1e-6);
+          });
+        });
+
+        it('should keep d ignoring the dawn insulin when that d is already positive', function () {
+          var cases = run({ treatments: baseTreatments().concat([dawn]), readingsByDay: readings(dawnRise) });
+          find(cases, 0, 6).d.should.be.approximately(0.3 / 0.8, 1e-6);
+        });
+
+        it('should spread the dawn insulin pro rata over the 4 h after the bolus', function () {
+          // Bolus at 06:30: hour 6 and hour 10 get 0.15 U, hours 7 to 9 get 0.3 U.
+          var late = bolusAt(0, 6, 30, 1.2);
+          var drop = function dropFrom630 (di, h, m) {
+            var t = h * 60 + m;
+            if (di !== 0 || t < 360 || t > 660) return 130;
+            return 130 - (t - 360) * 9 / 60;
+          };
+          var cases = run({ treatments: baseTreatments().concat([late]), readingsByDay: readings(drop) });
+          // hour 6: dLo -0.375, dHi -0.375 + 0.15/0.8 = -0.1875
+          find(cases, 0, 6).d.should.be.approximately(-0.1875, 1e-6);
+          Math.abs(find(cases, 0, 8).d).should.be.below(1e-6);
+          find(cases, 0, 10).d.should.be.approximately(-0.1875, 1e-6);
+          // hour 11 is outside the dawn spread and stays unchanged
+          var without = run({ readingsByDay: readings(drop) });
+          find(cases, 0, 11).d.should.be.approximately(find(without, 0, 11).d, 1e-9);
+        });
+      });
+
       it('should drop all cases without a valid sens and report it', function () {
         var noSens = { units: 'mg/dl', basal: store.basal };
         var cases = run({ profileStore: noSens });
@@ -1102,7 +1156,7 @@ describe('pump_analysis recommendations', function () {
       , sens: [{ time: '00:00', value: 30 }]
     };
     var RAISE_WARNING = 'Pump often raises basal here, but hypo on %1/%2 days, clarify the cause first';
-    var DAWN = 'Dawn bolus on %1/%2 days not counted, avg %3 U';
+    var DAWN = 'Dawn bolus on %1/%2 days taken into account as a range, avg %3 U';
 
     function dayKey (dayIdx) {
       var d = new Date(Date.UTC(2026, 9, 1 + dayIdx));

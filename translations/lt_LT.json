@@ -851,7 +851,7 @@
     "On %1/%2 days Control-IQ raised basal in this period, avg %3 U/h (%4 %)": "On %1/%2 days Control-IQ raised basal in this period, avg %3 U/h (%4 %)",
     "On %1/%2 days Control-IQ lowered basal in this period, avg %3 U/h (%4 %)": "On %1/%2 days Control-IQ lowered basal in this period, avg %3 U/h (%4 %)",
     "On %1/%2 days correction in this period, avg %3 U": "On %1/%2 days correction in this period, avg %3 U",
-    "Dawn bolus on %1/%2 days not counted, avg %3 U": "Dawn bolus on %1/%2 days not counted, avg %3 U",
+    "Dawn bolus on %1/%2 days taken into account as a range, avg %3 U": "Dawn bolus on %1/%2 days taken into account as a range, avg %3 U",
     "No pump basal data, basal recommendations are not available": "No pump basal data, basal recommendations are not available",
     "Data: %1 days, no pump basal data": "Data: %1 days, no pump basal data",
     "Data: %1 pump days, %2 clean fasting windows; %3 unclear boluses not evaluated": "Data: %1 pump days, %2 clean fasting windows; %3 unclear boluses not evaluated",
