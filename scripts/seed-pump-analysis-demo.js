@@ -114,9 +114,16 @@ function buildData () {
     return doc;
   }
 
+  // Local wall-clock time on a day (DST-safe: 23 h and 25 h days keep their
+  // meals at the same clock time instead of shifting by an hour).
+  function atLocal (dayStart, minuteOfDay) {
+    return dayStart.clone().hours(Math.floor(minuteOfDay / 60)).minutes(minuteOfDay % 60);
+  }
+
   let noise = 0;
   for (let d = 0; d < DAYS; d++) {
     const dayStart = firstDay.clone().add(d, 'days').startOf('day');
+    const dayEnd = dayStart.clone().add(1, 'days');
     const plan = dayPlan[d];
 
     const lunchCarbs = 40 + Math.round(rand() * 20);
@@ -127,11 +134,11 @@ function buildData () {
     const lunchAt = 12.5 + (rand() - 0.5) * 0.5;
     const dinnerAt = 19 + (rand() - 0.5) * 0.5;
 
-    // CGM
-    for (let m = 0; m < 24 * 60; m += STEP_MIN) {
-      const time = dayStart.clone().add(m, 'minutes');
+    // CGM: step in real time until the next local midnight; h is the local
+    // clock hour, so the curve follows the wall clock on DST days too.
+    for (let time = dayStart.clone(); time.isBefore(dayEnd); time = time.clone().add(STEP_MIN, 'minutes')) {
       if (time.isAfter(now)) break;
-      const h = m / 60;
+      const h = time.hours() + time.minutes() / 60;
       let bg = 112;
       // dawn rise 02-06 (a bit weaker on days with the temp basal), dropped by the 06:00 bolus
       const dawnAmp = plan.tempBasal ? 55 : 75;
@@ -181,16 +188,16 @@ function buildData () {
       eventType: 'Meal Bolus', insulin: 1.2, carbs: 6, notes: 'Dawn bolus'
     });
     // Lunch / dinner
-    treatment(dayStart.clone().add(Math.round(lunchAt * 60), 'minutes'), {
+    treatment(atLocal(dayStart, Math.round(lunchAt * 60)), {
       eventType: 'Meal Bolus', insulin: lunchInsulin, carbs: lunchCarbs
     });
-    treatment(dayStart.clone().add(Math.round(dinnerAt * 60), 'minutes'), {
+    treatment(atLocal(dayStart, Math.round(dinnerAt * 60)), {
       eventType: d % 3 === 0 ? 'Combo Bolus' : 'Meal Bolus', insulin: dinnerInsulin, carbs: dinnerCarbs
     });
 
     // Corrections once BG > 240, at most one per two hours
     let lastCorrection = null;
-    entries.filter(function ofDay (e) { return e.date >= dayStart.valueOf() && e.date < dayStart.valueOf() + 864e5; })
+    entries.filter(function ofDay (e) { return e.date >= dayStart.valueOf() && e.date < dayEnd.valueOf(); })
       .forEach(function maybeCorrect (e) {
         if (e.sgv <= 240) return;
         if (lastCorrection !== null && e.date - lastCorrection < 2 * 3600e3) return;
@@ -204,7 +211,7 @@ function buildData () {
     const autoCount = 3 + Math.floor(rand() * 3);
     for (let a = 0; a < autoCount; a++) {
       const minute = Math.floor(rand() * 24 * 12) * 5;
-      treatment(dayStart.clone().add(minute, 'minutes'), {
+      treatment(atLocal(dayStart, minute), {
         eventType: 'Correction Bolus', insulin: round(0.1 + rand() * 0.3, 2), notes: 'Automatic Bolus'
       });
     }
