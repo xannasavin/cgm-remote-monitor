@@ -114,6 +114,34 @@ describe('pump_analysis', function () {
       });
     });
 
+    describe('insulin legend', function () {
+      function legendHtml (pumpActionStats) {
+        return statsRenderer.renderStats({}, [], {}, [], pumpActionStats);
+      }
+
+      it('shows pump per-day totals without dividing them again', function () {
+        var html = legendHtml({
+          basal_source: 'pump'
+          , basal_actual: { total: 19.3 }
+          , bolus_distribution: { user_total: 23.1, auto_total_by_bucket: { near_meal: 0.8, intermediate: 0.4, far_from_meal: 0.2 } }
+          , coverage: { pump_days: 14, total_days: 14 }
+        });
+        html.should.containEql('19.30');
+        html.should.containEql('23.10');
+        html.should.containEql('1.40');
+      });
+
+      it('shows profile-scheduled basal per day without dividing', function () {
+        var html = legendHtml({
+          basal_source: 'profile_fallback'
+          , basal_scheduled: { total: 17.5 }
+          , bolus_distribution: { user_total: 0 }
+          , coverage: { pump_days: 0, total_days: 14 }
+        });
+        html.should.containEql('17.50');
+      });
+    });
+
     it('emits the daily TIR chart placeholder only for more than one day', function () {
       var day = { average: 140, sd: 28, cv: 20, mage: 60, tir_pct: 72, tbr_pct: 5, tar_pct: 23
         , hypo_episodes: [], hyper_episodes: [], total_readings: 288
