@@ -1054,6 +1054,21 @@ describe('pump_analysis directional basal delta and hotspot units', function () 
     text.should.not.containEql('NaN');
   });
 
+  it('never shows a signed zero in the hotspot delta row', function () {
+    var perHour = [];
+    for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: 0.8, direction: 1, signalDays: 3 });
+    var delta = new Array(24).fill(0);
+    delta[1] = -0.001;
+    delta[2] = 0.004;
+    delta[3] = -0.006;
+    charts.renderPumpActionHotspot('#chart', { perHour: perHour, hotspots: [0, 1, 2, 3], pumpDays: 5, deltaUnitsPerHour: delta }, {});
+    var text = env.window.document.getElementById('chart').textContent;
+    text.should.not.containEql('-0.00');
+    text.should.not.containEql('+0.00');
+    text.should.containEql('0.00');
+    text.should.containEql('-0.01');
+  });
+
   it('omits the delta row without deltaUnitsPerHour', function () {
     var perHour = [];
     for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: 0, direction: 1, signalDays: 0 });
