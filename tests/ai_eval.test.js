@@ -1049,6 +1049,31 @@ describe('ai_eval in the report page', function () {
     area.textContent.should.equal('');
   });
 
+  it('report() timer is cleared by the next report() and survives a removed window', function () {
+    mount();
+    env.window.processAiEvaluationData = function () {};
+    var fixture = buildStorage(2);
+    var originalSet = global.setTimeout;
+    var originalClear = global.clearTimeout;
+    var scheduled = [];
+    var cleared = [];
+    global.setTimeout = function (fn) { scheduled.push(fn); return scheduled.length; };
+    global.clearTimeout = function (handle) { cleared.push(handle); };
+    var savedWindow = global.window;
+    try {
+      aiEval.report(fixture.ds, fixture.days, {});
+      aiEval.report(fixture.ds, fixture.days, {});
+      scheduled.should.have.length(2);
+      cleared.should.containEql(1);
+      delete global.window;
+      (function () { scheduled[1](); }).should.not.throw();
+    } finally {
+      global.window = savedWindow;
+      global.setTimeout = originalSet;
+      global.clearTimeout = originalClear;
+    }
+  });
+
   it('shows an error box and skips AI requests when the analysis throws', function () {
     mount();
     var fixture = buildStorage(2);
