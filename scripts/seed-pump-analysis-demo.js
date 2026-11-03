@@ -11,8 +11,10 @@
 //   node scripts/dev-memory-server.js           # in-memory MongoDB + server
 //   node scripts/seed-pump-analysis-demo.js     # seed it (second terminal)
 //
-// The target database is taken from MONGODB_URI or CUSTOMCONNSTR_mongo,
-// default mongodb://127.0.0.1:27099/nightscout (the dev-memory-server one).
+// The target database is mongodb://127.0.0.1:27099/nightscout (the one of
+// dev-memory-server). Inherited MONGODB_URI / CUSTOMCONNSTR_mongo are ignored on
+// purpose. Override only with SEED_MONGODB_URI; a host other than 127.0.0.1 or
+// localhost is refused unless SEED_ALLOW_REMOTE=1.
 // Deterministic (seeded PRNG) and idempotent: every document carries
 // enteredBy 'pump-analysis-demo' and previous demo documents are deleted first.
 
@@ -66,8 +68,21 @@ function smoothstep (x) {
   return c * c * (3 - 2 * c);
 }
 
-function main () {
-  const uri = process.env.MONGODB_URI || process.env.CUSTOMCONNSTR_mongo || DEFAULT_URI;
+// Only the dedicated SEED_MONGODB_URI may change the target; non-local hosts
+// need SEED_ALLOW_REMOTE=1. Throws before any connection is made.
+function resolveUri () {
+  const uri = process.env.SEED_MONGODB_URI || DEFAULT_URI;
+  const match = /^mongodb(?:\+srv)?:\/\/(?:[^@/]*@)?([^/?]+)/.exec(uri);
+  const hosts = match ? match[1].split(',').map(function hostOf (h) { return h.replace(/:\d+$/, '').toLowerCase(); }) : [];
+  const local = hosts.length > 0 && hosts.every(function isLocal (h) { return h === '127.0.0.1' || h === 'localhost'; });
+  if (!local && process.env.SEED_ALLOW_REMOTE !== '1') {
+    throw new Error('refusing non-local database host (' + (hosts.join(',') || 'unparsable URI') + '); set SEED_ALLOW_REMOTE=1 to override');
+  }
+  return uri;
+}
+
+function buildData () {
+  const uri = resolveUri();
   const rand = mulberry32(20261103);
 
   const today = moment.tz(TIMEZONE).startOf('day');
@@ -230,7 +245,7 @@ function main () {
 }
 
 async function run () {
-  const data = main();
+  const data = buildData();
   const client = new MongoClient(data.uri);
   await client.connect();
   const db = client.db();

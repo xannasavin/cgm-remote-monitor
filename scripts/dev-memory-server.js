@@ -41,6 +41,12 @@ async function main () {
     if (key === 'CUSTOMCONNSTR_mongo' || process.env[key] === undefined) process.env[key] = defaults[key];
   });
 
+  // env.js prefers these over CUSTOMCONNSTR_mongo; an inherited one would point
+  // the server at a real database.
+  ['STORAGE_URI', 'MONGO_CONNECTION', 'MONGO', 'MONGOLAB_URI', 'MONGODB_URI'].forEach(function dropAlias (key) {
+    delete process.env[key];
+  });
+
   async function stop () {
     try { await mongod.stop(); } catch (e) { /* ignore */ }
     process.exit(0);
