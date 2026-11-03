@@ -893,6 +893,7 @@
     "Confidence medium": "Vertrauen mittel",
     "Confidence low": "Vertrauen niedrig",
     "%1 %2, no change possible within %3 %": "%1 %2, keine Änderung möglich innerhalb von %3 %",
+    "%1, no change possible within %2 %": "%1, keine Änderung möglich innerhalb von %2 %",
     "Not enough data": "Zu wenig Daten",
     "No change": "Keine Änderung",
     "No factor change": "Keine Faktor-Änderung",

@@ -721,6 +721,48 @@ describe('pump_analysis recommendations_renderer', function () {
     html.should.not.containEql('→');
   });
 
+  it('has no stray space for an unchanged row without unit', function () {
+    var html = recRenderer.renderRecommendations(rec([card({
+      allUnchanged: true
+      , rows: [{ from: '02:00', to: '06:00', oldValue: '10', newValue: '10', unit: '', unchanged: true }]
+    })]));
+    html.should.containEql('10, no change possible within 20 %');
+    html.should.not.containEql('10 ,');
+  });
+
+  it('does not load the recommendation engine', function () {
+    var src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'report_plugins', 'pump_analysis', 'recommendations_renderer.js'), 'utf8');
+    src.should.not.match(/require\([^)]*recommendation_engine/);
+  });
+
+  it('renders the titles for ok, timing and isf cards', function () {
+    function title (over) {
+      var html = recRenderer.renderRecommendations(rec([card(over)]));
+      return html.match(/<span class="rec-what">([^<]*)<\/span>/)[1];
+    }
+    title({ state: 'ok' }).should.equal('Basal rate fits');
+    title({ kind: 'timing', state: 'timing' }).should.equal('Check injection-meal interval');
+    title({ kind: 'isf', state: 'up' }).should.equal('Correction factor: stronger');
+    title({ kind: 'isf', state: 'down' }).should.equal('Correction factor: weaker');
+    title({ kind: 'isf', state: 'ok' }).should.equal('Correction factor fits');
+    title({ kind: 'carb', state: 'ok' }).should.equal('Carb ratio fits');
+    title({ kind: 'isf', state: 'warning' }).should.equal('Check first: Correction factor');
+  });
+
+  it('renders No change / No factor change for ok and timing cards', function () {
+    recRenderer.renderRecommendations(rec([card({ state: 'ok' })])).should.containEql('No change');
+    recRenderer.renderRecommendations(rec([card({ kind: 'timing', state: 'timing' })])).should.containEql('No factor change');
+  });
+
+  it('renders the medium and low confidence badges', function () {
+    var mid = recRenderer.renderRecommendations(rec([card({ confidence: 'medium' })]));
+    mid.should.containEql('rec-badge rec-mid');
+    mid.should.containEql('Confidence medium');
+    var low = recRenderer.renderRecommendations(rec([card({ confidence: 'low' })]));
+    low.should.containEql('rec-badge rec-low');
+    low.should.containEql('Confidence low');
+  });
+
   it('renders an insufficient card with Not enough data and no share', function () {
     var html = recRenderer.renderRecommendations(rec([card({
       state: 'insufficient', confidence: 'insufficient', sameDirShare: 0.8, rows: []

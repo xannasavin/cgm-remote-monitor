@@ -890,6 +890,7 @@
     "Confidence medium": "Confidence medium",
     "Confidence low": "Confidence low",
     "%1 %2, no change possible within %3 %": "%1 %2, no change possible within %3 %",
+    "%1, no change possible within %2 %": "%1, no change possible within %2 %",
     "Not enough data": "Not enough data",
     "No change": "No change",
     "No factor change": "No factor change",
