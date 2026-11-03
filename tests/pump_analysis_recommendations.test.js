@@ -4,6 +4,31 @@ require('should');
 
 describe('pump_analysis recommendations', function () {
 
+  describe('profileSensMgdl', function () {
+    var bc = require('../lib/report_plugins/pump_analysis/bolus_classifier');
+
+    it('should convert mmol sens to mg/dl', function () {
+      var store = { units: 'mmol', sens: [{ time: '00:00', value: 2.5 }] };
+      bc.profileSensMgdl({}, store)(12, 0).should.be.approximately(45, 0.1);
+    });
+
+    it('should read units from the profile document', function () {
+      var store = { sens: [{ time: '00:00', value: 2.5 }] };
+      bc.profileSensMgdl({ units: 'mmol/L' }, store)(3, 0).should.be.approximately(45, 0.1);
+    });
+
+    it('should keep mg/dl sens unchanged and step by time', function () {
+      var store = { units: 'mg/dl', sens: [{ time: '00:00', value: 40 }, { time: '12:00', value: 50 }] };
+      var lookup = bc.profileSensMgdl({}, store);
+      lookup(6, 0).should.equal(40);
+      lookup(13, 0).should.equal(50);
+    });
+
+    it('should return null without a sens schedule', function () {
+      (bc.profileSensMgdl({}, { basal: [] })(1, 0) === null).should.equal(true);
+    });
+  });
+
   describe('bolus_classifier', function () {
     var bc = require('../lib/report_plugins/pump_analysis/bolus_classifier');
 

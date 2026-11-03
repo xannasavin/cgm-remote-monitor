@@ -797,6 +797,23 @@ describe('pump action pipeline', function () {
     });
   });
 
+  describe('buildProfileScheduleLookup', function () {
+    it('should step through a carbratio schedule', function () {
+      var lookup = statistics.buildProfileScheduleLookup({
+        carbratio: [{ time: '00:00', value: 10 }, { time: '11:00', value: 8 }]
+      }, 'carbratio');
+      lookup(12, 0).should.equal(8);
+      lookup(6, 0).should.equal(10);
+      lookup(11, 0).should.equal(8);
+    });
+
+    it('should return null for a missing schedule', function () {
+      var lookup = statistics.buildProfileScheduleLookup({ basal: [{ time: '00:00', value: 1 }] }, 'carbratio');
+      (lookup(12, 0) === null).should.equal(true);
+      (statistics.buildProfileScheduleLookup(null, 'sens')(1, 0) === null).should.equal(true);
+    });
+  });
+
   // ---- buildProfileBasalLookup / sumScheduledBasalByHour ---------------
 
   describe('buildProfileBasalLookup / sumScheduledBasalByHour', function () {
