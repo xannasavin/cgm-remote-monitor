@@ -29,6 +29,24 @@ describe('pump_analysis recommendations', function () {
     });
   });
 
+  describe('profile schedule lookup', function () {
+    var statistics = require('../lib/statistics');
+
+    it('should return null for an empty carbratio schedule', function () {
+      (statistics.buildProfileScheduleLookup({ carbratio: [] }, 'carbratio')(12, 0) === null).should.equal(true);
+    });
+
+    it('should carry the last segment over midnight when the schedule starts after 00:00', function () {
+      var lookup = statistics.buildProfileScheduleLookup({ carbratio: [{ time: '22:00', value: 8 }, { time: '06:00', value: 12 }] }, 'carbratio');
+      lookup(0, 0).should.equal(8);
+      lookup(5, 59).should.equal(8);
+      lookup(6, 0).should.equal(12);
+      lookup(21, 59).should.equal(12);
+      lookup(22, 0).should.equal(8);
+      lookup(23, 59).should.equal(8);
+    });
+  });
+
   describe('bolus_classifier', function () {
     var bc = require('../lib/report_plugins/pump_analysis/bolus_classifier');
 
@@ -141,6 +159,26 @@ describe('pump_analysis recommendations', function () {
         entries[0].consumedBy.should.equal(new Date(utcFor(12, 0)).getTime());
         entries[0].consumedBy.should.equal(entries[0].mills);
       });
+
+      it('should give an equidistant carb entry to the earlier bolus', function () {
+        var t = [bolus(12, 40, 4), carbEntry(12, 20, 48), bolus(12, 0, 4)];
+        var list = classify(t, [reading(11, 58, 150), reading(12, 38, 150)]);
+        list.length.should.equal(2);
+        list[0].mills.should.equal(new Date(utcFor(12, 0)).getTime());
+        list[0].cls.should.equal('meal');
+        list[0].carbs.should.equal(48);
+        list[1].carbs.should.equal(0);
+        list[1].cls.should.not.equal('meal');
+      });
+
+      it('should keep a dawn bolus with a separate small carb entry as dawn', function () {
+        var t = [bolus(6, 30, 1.2), carbEntry(6, 40, 6)];
+        var list = classify(t);
+        list.length.should.equal(1);
+        list[0].cls.should.equal('dawn');
+        list[0].carbs.should.equal(6);
+        bc.carbEntries(t)[0].consumedBy.should.equal(list[0].mills);
+      });
     });
 
     describe('correction', function () {
@@ -192,6 +230,10 @@ describe('pump_analysis recommendations', function () {
         classify([{ eventType: 'Note', notes: 'Cannula Filled (0.7u primed)', insulin: 0.7, created_at: utcFor(14, 0), utcOffset: 60 }]).length.should.equal(0);
       });
 
+      it('should skip a Cannula Filled event type', function () {
+        classify([{ eventType: 'Cannula Filled', insulin: 0.7, created_at: utcFor(14, 0), utcOffset: 60 }]).length.should.equal(0);
+      });
+
       it('should skip UserAborted with zero insulin', function () {
         classify([bolus(14, 0, 0, { notes: 'UserAborted' })]).length.should.equal(0);
       });
@@ -211,6 +253,7 @@ describe('pump_analysis recommendations', function () {
   describe('basal_recommendations', function () {
     var bc = require('../lib/report_plugins/pump_analysis/bolus_classifier');
     var br = require('../lib/report_plugins/pump_analysis/basal_recommendations');
+    var u = require('../lib/report_plugins/pump_analysis/recommendation_utils');
 
     var MIN = 60 * 1000;
     var HOUR = 60 * MIN;
@@ -396,11 +439,50 @@ describe('pump_analysis recommendations', function () {
         find(cases, 0, 11).d.should.be.approximately(-1 / 0.8, 1e-6);
       });
 
-      it('should count auto boluses in the hour into d', function () {
-        var t = baseTreatments().concat([bolusAt(0, 3, 20, 0.3, { notes: 'Automatic Bolus' })]);
-        var c = find(run({ treatments: t }), 0, 3);
-        c.autoU.should.be.approximately(0.3, 1e-9);
-        c.d.should.be.approximately((0.9 + 0.3) / 0.6 - 1, 1e-6);
+      it('should spread an auto bolus at 03:50 pro rata over hours 3 to 7 into d', function () {
+        var t = baseTreatments().concat([bolusAt(0, 3, 50, 0.48, { notes: 'Automatic Bolus' })]);
+        var cases = run({ treatments: t });
+        // 0.48 U over 240 min = 0.002 U/min: 10 min in hour 3, 60 in 4-6, 50 in 7.
+        find(cases, 0, 3).autoU.should.be.approximately(0.02, 1e-9);
+        [4, 5, 6].forEach(function full (h) { find(cases, 0, h).autoU.should.be.approximately(0.12, 1e-9); });
+        find(cases, 0, 7).autoU.should.be.approximately(0.1, 1e-9);
+        find(cases, 0, 8).autoU.should.equal(0);
+        find(cases, 0, 2).autoU.should.equal(0);
+        find(cases, 0, 3).d.should.be.approximately((0.9 + 0.02) / 0.6 - 1, 1e-6);
+        // Auto insulin is no dawn range: hour 7 (profile 0.8, no temp basal) keeps d = +0.1 / 0.8.
+        find(cases, 0, 7).d.should.be.approximately(0.1 / 0.8, 1e-6);
+      });
+
+      it('should not drop any case for a dawn bolus with a separate small carb entry', function () {
+        var t = baseTreatments().concat([bolusAt(0, 6, 0, 1.2), carbsAt(0, 6, 10, 6)]);
+        run({ treatments: t }).length.should.equal(PUMP_DAYS * 24);
+      });
+
+      it('should place each day by the offset of its chronologically first treatment', function () {
+        // Day 0 is a travel day: the first treatment (01:00 local) has +60, a
+        // later one +120. The later one comes first in the array.
+        var late = bolusAt(0, 20, 0, 0.3, { notes: 'Automatic Bolus', utcOffset: 120 });
+        var map = u.offsetsByDay([late].concat(baseTreatments(), [bolusAt(0, 1, 0, 0.2, { notes: 'Automatic Bolus' })]));
+        map[dayKey(0)].should.equal(60);
+        u.offsetsByDay([
+          { created_at: new Date(at(1, 22, 0)).toISOString(), utcOffset: 120 }
+          , { created_at: new Date(at(1, 1, 0)).toISOString(), utcOffset: 60 }
+        ])[dayKey(1)].should.equal(60);
+      });
+
+      it('should give the same per-day basal as integrateActualBasalByHour', function () {
+        var statistics = require('../lib/statistics');
+        // An event spanning midnight, an overlapping later event and one without created_at.
+        var t = baseTreatments().concat([
+          tempBasal(3, 22, 180, 1.4)
+          , tempBasal(3, 23, 30, 0.2)
+          , { eventType: 'Temp Basal', mills: at(5, 4, 0), absolute: 2, duration: 60, utcOffset: OFFSET_MIN }
+          , bolusAt(4, 12, 0, 2)
+        ]);
+        var dayBasal = u.dayBasalLookup(t, store);
+        allKeys(DAYS).forEach(function same (dk) {
+          dayBasal(dk).should.eql(statistics.integrateActualBasalByHour(t, store, [dk]));
+        });
       });
 
       describe('dawn insulin (R22)', function () {
@@ -646,6 +728,13 @@ describe('pump_analysis recommendations', function () {
           r.should.not.have.property('unchanged');
         });
 
+        it('should take the next grid step 0.20 when 0.25 x 0.9 rounds back to 0.25', function () {
+          // 0.225 rounds to 0.25 (no move); the next step down 0.20 is exactly -20 %.
+          var r = rowFor(0.25, -0.1);
+          r.newRate.should.equal(0.2);
+          r.should.not.have.property('unchanged');
+        });
+
         it('should keep 0.2 unchanged for down 10 % (0.15 is -25 %)', function () {
           var r = rowFor(0.2, -0.1);
           r.newRate.should.equal(0.2);
@@ -831,12 +920,39 @@ describe('pump_analysis recommendations', function () {
         c.effectiveRatio.should.be.approximately(60 / 7.5, 1e-6);
       });
 
-      it('should drop a case whose denominator is not positive', function () {
+      it('should keep a case whose denominator is not positive as d = -1 without a ratio', function () {
         // 1 U, BG 200 to 110 with sens 45: residual -2 U, denominator -1.
+        // The true d tends to -1 (far too much insulin); dropping it would bias
+        // the median toward more insulin.
         var bg = ramp([[at(0, 12, 0), 200], [at(0, 16, 0), 110]]);
         var cases = meals({ treatments: [mealAt(0, 12, 0, 1, 20)], bg: bg });
-        cases.length.should.equal(0);
-        cases.skipped.nonPositive.should.equal(1);
+        cases.length.should.equal(1);
+        cases[0].d.should.equal(-1);
+        cases[0].nonPositive.should.equal(true);
+        (cases[0].effectiveRatio === null).should.equal(true);
+        cases.should.have.property('skipped');
+        cases.skipped.should.not.have.property('nonPositive');
+      });
+
+      it('should not mark a normal case as nonPositive', function () {
+        meals({ treatments: [mealAt(0, 12, 0, 6, 60)] })[0].should.not.have.property('nonPositive');
+      });
+
+      it('should count dawn insulin overlapping the meal window pro rata over 4 h', function () {
+        // 1.2 U dawn bolus at 06:00, breakfast at 07:00: 07:00-10:00 holds 0.9 U.
+        var t = [bolusAt(0, 6, 0, 1.2), mealAt(0, 7, 0, 3, 39)];
+        var cases = meals({ treatments: t });
+        cases.length.should.equal(1);
+        cases[0].dawnU.should.be.approximately(0.9, 1e-9);
+        cases[0].effectiveRatio.should.be.approximately(39 / 3.9, 1e-6);
+      });
+
+      it('should count the basal deviation after midnight for a dinner window', function () {
+        // Dinner at 21:00, window until 01:00; +1 U temp basal 00:00-01:00 on the next day.
+        var t = [mealAt(0, 21, 0, 6, 60), tempBasal(1, 0, 0, 60, 1.8)];
+        var c = meals({ treatments: t })[0];
+        c.slot.should.equal('dinner');
+        c.effectiveRatio.should.be.approximately(60 / 7, 1e-6);
       });
 
       it('should drop both meals when a second meal follows within 4 h', function () {
@@ -875,12 +991,14 @@ describe('pump_analysis recommendations', function () {
         cases.length.should.equal(0);
       });
 
-      it('should ignore a dawn bolus and its carbs inside a meal window', function () {
+      it('should ignore the carbs of a dawn bolus inside a meal window but count its insulin', function () {
+        // Dawn bolus 1 U at 07:30: 2.5 of its 4 h fall into the 06:00-10:00 window.
         var t = [mealAt(0, 6, 0, 3, 30), bolusAt(0, 7, 30, 1, { carbs: 6 })];
         var cases = meals({ treatments: t });
         cases.length.should.equal(1);
         cases[0].slot.should.equal('breakfast');
-        cases[0].effectiveRatio.should.be.approximately(10, 1e-6);
+        cases[0].carbs.should.equal(30);
+        cases[0].effectiveRatio.should.be.approximately(30 / 3.625, 1e-6);
       });
 
       it('should yield no case for a meal outside the slots', function () {
@@ -895,6 +1013,19 @@ describe('pump_analysis recommendations', function () {
         var cases = meals({ treatments: t, profileStore: noCr });
         cases.length.should.equal(0);
         cases.skipped.noRatio.should.equal(1);
+        var empty = meals({ treatments: t, profileStore: storeWith({ carbratio: [] }) });
+        empty.length.should.equal(0);
+        empty.skipped.noRatio.should.equal(1);
+      });
+
+      it('should count a missing start BG and a missing BG after 4 h separately', function () {
+        // No reading within 10 min of 16:00, coverage stays above 80 %.
+        var noEnd = function gap (ms) { return ms >= at(0, 15, 50) && ms < at(0, 16, 15) ? null : 120; };
+        var cases = meals({ treatments: [mealAt(0, 12, 0, 6, 60)], bg: noEnd });
+        cases.length.should.equal(0);
+        cases.skipped.noEndBg.should.equal(1);
+        cases.skipped.noStartBg.should.equal(0);
+        cases.skipped.should.not.have.property('noBg');
       });
 
       it('should drop the case when sens is missing', function () {
@@ -916,7 +1047,6 @@ describe('pump_analysis recommendations', function () {
 
       it('should assume scheduled basal without any pump days', function () {
         var inp = input({ treatments: [mealAt(0, 12, 0, 6, 60)], pumpDayKeys: [] });
-        inp.pumpDayKeys = [];
         fr.computeMealCases(inp)[0].effectiveRatio.should.be.approximately(10, 1e-6);
       });
     });
@@ -1032,6 +1162,13 @@ describe('pump_analysis recommendations', function () {
         var cases = repeat(4, function c () { return mkCase(0.3); }).concat(repeat(2, function c () { return mkCase(0); }));
         fr.summarizeMealSlot(cases).sameDirShare.should.be.approximately(4 / 6, 1e-9);
       });
+
+      it('should break a tie of profile ratios toward the earliest case', function () {
+        var ratios = [12, 10, 10, 12, 11];
+        var s = fr.summarizeMealSlot(ratios.map(function c (r) { return mkCase(0.3, { ratio: r }); }));
+        s.oldRatio.should.equal(12);
+        s.mixedProfile.should.equal(true);
+      });
     });
 
     describe('computeCorrectionCases', function () {
@@ -1089,7 +1226,53 @@ describe('pump_analysis recommendations', function () {
         var bg = ramp([[at(0, 13, 0), 260], [at(0, 17, 0), 260]]);
         var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2)], bg: bg, profileStore: sens60 });
         cases.length.should.equal(0);
-        cases.skipped.nonPositive.should.equal(1);
+        cases.skipped.noDrop.should.equal(1);
+        cases.skipped.should.not.have.property('nonPositive');
+      });
+
+      it('should keep a correction with a BG drop but no positive insulin as d = -1', function () {
+        // 0.5 U, basal suspended 14:00-17:00 (-2.4 U against profile 0.8): total -1.9 U.
+        var t = [bolusAt(0, 14, 0, 0.5), tempBasal(0, 14, 0, 180, 0)];
+        var cases = corrections({ treatments: t, bg: corrBg(0), profileStore: sens60 });
+        cases.length.should.equal(1);
+        cases[0].d.should.equal(-1);
+        cases[0].nonPositive.should.equal(true);
+        (cases[0].measuredIsf === null).should.equal(true);
+      });
+
+      it('should count dawn insulin overlapping the correction window', function () {
+        // Dawn bolus 1.2 U at 06:00, correction 2 U at 08:00: 08:00-10:00 holds 0.6 U.
+        var bg = ramp([[at(0, 7, 0), 120], [at(0, 7, 5), 260], [at(0, 8, 0), 260], [at(0, 11, 0), 170], [at(0, 11, 5), 120]]);
+        var t = [bolusAt(0, 6, 0, 1.2), bolusAt(0, 8, 0, 2)];
+        var cases = corrections({ treatments: t, bg: bg, profileStore: sens60 });
+        cases.length.should.equal(1);
+        cases[0].dawnU.should.be.approximately(0.6, 1e-9);
+        cases[0].measuredIsf.should.be.approximately(90 / 2.6, 1e-6);
+      });
+
+      it('should not measure a correction with a hypo treatment within 3 h', function () {
+        var hypo = { eventType: 'Hypo Treatment', created_at: iso(at(0, 16, 0)), mills: at(0, 16, 0), utcOffset: OFFSET_MIN };
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2), hypo], bg: corrBg(0), profileStore: sens60 });
+        cases.length.should.equal(0);
+        cases.skipped.disturbed.should.equal(1);
+      });
+
+      it('should drop a correction when a pump user has no basal data for the window day', function () {
+        var inp = input({ treatments: [bolusAt(0, 14, 0, 2)], bg: corrBg(0), profileStore: sens60 });
+        inp.treatments = inp.treatments.filter(function notDay0 (x) { return !(x.eventType === 'Temp Basal' && x.mills === at(0, 0, 0)); });
+        var cases = fr.computeCorrectionCases(inp);
+        cases.length.should.equal(0);
+        cases.skipped.noPumpBasal.should.equal(1);
+      });
+
+      it('should count a missing BG after 3 h as noEndBg', function () {
+        var base = corrBg(0);
+        var bg = function gap (ms) { return ms >= at(0, 16, 50) && ms < at(0, 17, 15) ? null : base(ms); };
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2)], bg: bg, profileStore: sens60 });
+        cases.length.should.equal(0);
+        cases.skipped.noEndBg.should.equal(1);
+        cases.skipped.noStartBg.should.equal(0);
+        cases.skipped.should.not.have.property('noBg');
       });
     });
 
@@ -1268,13 +1451,30 @@ describe('pump_analysis recommendations', function () {
         eps[0].end.should.equal(at(0, 3, 25));
       });
 
-      it('should ignore a run shorter than 15 min', function () {
-        engine.findHighEpisodes(series([200, 260, 262, 270, 200]), 250, 15).length.should.equal(0);
+      it('should count 3 readings (10 min first to last plus one 5 min sample) as 15 min, like hypo episodes', function () {
+        var eps = engine.findHighEpisodes(series([200, 260, 262, 270, 200]), 250, 15);
+        eps.length.should.equal(1);
+        eps[0].start.should.equal(at(0, 3, 5));
+        eps[0].end.should.equal(at(0, 3, 15));
+      });
+
+      it('should ignore a run of 2 readings (10 min with the sample)', function () {
+        engine.findHighEpisodes(series([200, 260, 262, 200]), 250, 15).length.should.equal(0);
       });
 
       it('should split a run at a gap over 15 min', function () {
-        var r = series([260, 260, 260, 260]).concat([{ mills: at(0, 4, 0), sgv: 260 }, { mills: at(0, 4, 5), sgv: 260 }]);
-        engine.findHighEpisodes(r, 250, 15).length.should.equal(1);
+        // Two 15-min runs 25 min apart; without the split they would form one run.
+        var r = series([260, 260, 260]).concat(
+          [{ mills: at(0, 3, 35), sgv: 260 }, { mills: at(0, 3, 40), sgv: 260 }, { mills: at(0, 3, 45), sgv: 260 }]);
+        var eps = engine.findHighEpisodes(r, 250, 15);
+        eps.length.should.equal(2);
+        eps[0].should.eql({ start: at(0, 3, 0), end: at(0, 3, 10) });
+        eps[1].should.eql({ start: at(0, 3, 35), end: at(0, 3, 45) });
+      });
+
+      it('should not split a run at a gap of exactly 15 min', function () {
+        var r = series([260, 260]).concat([{ mills: at(0, 3, 20), sgv: 260 }]);
+        engine.findHighEpisodes(r, 250, 15).should.eql([{ start: at(0, 3, 0), end: at(0, 3, 20) }]);
       });
     });
 
@@ -1366,6 +1566,71 @@ describe('pump_analysis recommendations', function () {
         (reasonOf(card, 'On %1/%2 days correction in this period, avg %3 U') === undefined).should.equal(true);
         reasonOf(card, DAWN).should.be.ok();
         reasonOf(card, 'No hypo in this period').should.be.ok();
+      });
+
+      it('should keep the dawn reason and the 1 h earlier hint over "no hypo" on a pump + drift card', function () {
+        // pump, drift, no hypo, dawn and extension would be 5 reasons.
+        var t = basalTreatments(0.9);
+        for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        var bg = function drift (d, h, m) {
+          var tm = h * 60 + m;
+          if (tm >= 120 && tm < 360) return 130 + (tm - 120) * 3 / 60;
+          if (tm >= 360 && tm < 600) return 142 - (tm - 360) * 3 / 60;
+          return 130;
+        };
+        var card = cardAt(engine.buildRecommendations(input({ treatments: t, readingsByDay: readings(bg) })), '01:00-06:00');
+        card.state.should.equal('up');
+        card.reasons.map(function k (r) { return r.key; }).should.eql([
+          'On %1/%2 days Control-IQ raised basal in this period, avg %3 U/h (%4 %)'
+          , DRIFT
+          , DAWN
+          , 'Suggestion starts 1 h earlier because insulin acts with a delay'
+        ]);
+      });
+
+      it('should keep an actual hypo counter-signal over the pump and drift reasons', function () {
+        var t = basalTreatments(0.9);
+        for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        var bg = function drift (d, h, m) {
+          var tm = h * 60 + m;
+          if (tm >= 120 && tm < 360) return 130 + (tm - 120) * 3 / 60;
+          if (tm >= 360 && tm < 600) return 142 - (tm - 360) * 3 / 60;
+          return 130;
+        };
+        var card = cardAt(engine.buildRecommendations(input({ treatments: t, readingsByDay: readings(bg), dayStats: hypoOnDays(1, 3) })), '01:00-06:00');
+        card.state.should.equal('up');
+        card.reasons.length.should.equal(4);
+        reasonOf(card, 'Hypo on %1/%2 days').args.should.eql(['1', '14']);
+        reasonOf(card, DAWN).should.be.ok();
+        reasonOf(card, 'Suggestion starts 1 h earlier because insulin acts with a delay').should.be.ok();
+      });
+
+      it('should never put Infinity or NaN into reasons when all corrections have no positive insulin', function () {
+        // 6 corrections of 0.5 U at BG 250 with basal suspended for 3 h: every
+        // case has a BG drop but total insulin below 0 (d = -1).
+        var t = [];
+        for (var di = 0; di < 6; di++) {
+          t.push(tempBasal(di, 14, 180, 0));
+          t.push(bolusAt(di, 14, 0, 0.5));
+        }
+        var bg = function corr (d, h, m) {
+          var tm = h * 60 + m;
+          if (d < 0 || d >= 6 || tm < 780 || tm > 1020) return undefined;
+          if (tm <= 840) return 250;
+          return 250 - (tm - 840) * 40 / 180;
+        };
+        var res = engine.buildRecommendations(input({ treatments: t, readingsByDay: readings(bg) }));
+        var isf = res.cards.filter(function isIsf (c) { return c.kind === 'isf'; })[0];
+        isf.state.should.equal('down');
+        isf.caseCount.should.equal(6);
+        res.cards.forEach(function eachCard (c) {
+          c.reasons.concat([c.basisLine]).forEach(function eachReason (r) {
+            r.args.forEach(function finite (a) { a.should.not.match(/Infinity|NaN/); });
+          });
+          c.rows.forEach(function eachRow (r) {
+            [r.oldValue, r.newValue].forEach(function finite (v) { if (v !== null) String(v).should.not.match(/Infinity|NaN/); });
+          });
+        });
       });
 
       it('should downgrade a basal down card one level with values above 250 for 20 min on 1 day', function () {

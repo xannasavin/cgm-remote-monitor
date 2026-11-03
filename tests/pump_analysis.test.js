@@ -235,6 +235,21 @@ describe('pump_analysis', function () {
         (dataProcessor.selectProfileForRange([a, b], '2026-11-03') === b).should.be.true();
       });
 
+      it('picks the latest profile when lastDayKey is null', function () {
+        var a = { startDate: '2026-01-01' };
+        var b = { startDate: '2099-01-01' };
+        var c = { startDate: '2026-06-01' };
+        (dataProcessor.selectProfileForRange([a, b, c], null) === b).should.be.true();
+      });
+
+      it('includes a profile starting later on the last report day, excludes the next day', function () {
+        var before = { startDate: '2026-10-01T00:00:00Z' };
+        var sameDay = { startDate: '2026-11-03T23:30:00Z' };
+        var nextDay = { startDate: '2026-11-04T00:00:00Z' };
+        (dataProcessor.selectProfileForRange([before, sameDay, nextDay], '2026-11-03') === sameDay).should.be.true();
+        (dataProcessor.selectProfileForRange([before, nextDay], '2026-11-03') === before).should.be.true();
+      });
+
       it('returns null for empty or missing profile lists', function () {
         (dataProcessor.selectProfileForRange([], '2026-11-03') === null).should.be.true();
         (dataProcessor.selectProfileForRange(null, '2026-11-03') === null).should.be.true();
@@ -392,6 +407,22 @@ describe('pump_analysis', function () {
           ['pumpExtras', 'mealCases', 'readingsByDayMgdl', 'basisLine'].forEach(function (k) {
             json.should.not.containEql(k);
           });
+        });
+
+        it('returns diurnalPercentiles in mmol for mmol input', function () {
+          var sgv = [];
+          for (var i = 0; i < 12; i++) sgv.push({ mills: 1710460800000 + i * 300000, sgv: 5 + i * 0.4 });
+          var ds = { '2026-03-15': { sgv: sgv, treatments: [] }, profiles: [], alldays: 1 };
+          var result = dataProcessor.prepareCgmData(ds, {}, { units: 'mmol', targetLow: 3.9, targetHigh: 10 });
+          var pct = result.pumpExtras.diurnalPercentiles;
+          pct.length.should.be.above(0);
+          pct.forEach(function (p) {
+            p.p50.should.be.within(5, 10.5);
+            p.p10.should.be.belowOrEqual(p.p90);
+          });
+          // the mmol readings also survive the dayStats sensor filter
+          result.dayStats[0].total_readings.should.equal(12);
+          result.dayStats[0].tir_pct.should.equal(100);
         });
 
         it('converts mmol readings to mg/dl for pumpExtras', function () {
