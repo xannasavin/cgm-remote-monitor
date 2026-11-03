@@ -870,6 +870,41 @@ describe('pump_analysis in the report page', function () {
     logged.should.have.length(1);
   });
 
+  it('passes the hotspot unit delta only when the profile is trusted', function () {
+    var charts = require('../lib/report_plugins/pump_analysis/charts');
+    var original = charts.renderPumpActionHotspot;
+    var originalError = console.error;
+    var received = [];
+    function statsFor (profileValid) {
+      var perHour = [];
+      for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: 0, direction: 1, signalDays: 0 });
+      return {
+        cgmData: { days: [{ date: '2026-03-14' }] }
+        , pumpActionStats: {
+          basal_source: 'pump'
+          , profile_valid: profileValid
+          , coverage: { pump_days: 3 }
+          , hotspots: { perHour: perHour, hotspots: [], pumpDays: 3 }
+          , basal_actual: { hourly: new Array(24).fill(1.3) }
+          , basal_scheduled: { hourly: new Array(24).fill(1) }
+        }
+      };
+    }
+    charts.renderPumpActionHotspot = function (id, data) { received.push(data.deltaUnitsPerHour); };
+    console.error = function () {};
+    mount({ settings: {}, translate: identity });
+    try {
+      plugin.renderCharts(statsFor(true));
+      plugin.renderCharts(statsFor(false));
+    } finally {
+      charts.renderPumpActionHotspot = original;
+      console.error = originalError;
+    }
+    received.should.have.length(2);
+    received[0][0].should.be.approximately(0.3, 1e-9);
+    (received[1] === null).should.equal(true);
+  });
+
   it('shows an error box instead of throwing on malformed data', function () {
     var original = analysisCache.getAnalysis;
     var originalError = console.error;
@@ -981,6 +1016,42 @@ describe('pump_analysis directional basal delta and hotspot units', function () 
       perHour: perHour, hotspots: [3], pumpDays: 5, deltaUnitsPerHour: delta
     }, {});
     env.window.document.getElementById('chart').textContent.should.containEql('+0.30');
+  });
+
+  it('interpolates the crossing when the delta changes sign between hours', function () {
+    var scheduled = new Array(24).fill(1);
+    var actual = new Array(24).fill(1);
+    actual[3] = 1.5;
+    actual[4] = 0.5;
+    charts.renderBasalDeltaChart('#chart', { scheduledHourly: scheduled, actualHourly: actual, pumpDays: 5 });
+    var red = filled(charts.COLORS.hyper);
+    var blue = filled(charts.COLORS.basalBelow);
+    red.length.should.equal(1);
+    blue.length.should.equal(1);
+    var crossingX = (900 - 50 - 24) * 3.5 / 23;
+    [red[0], blue[0]].forEach(function (p) {
+      var nums = p.getAttribute('d').match(/-?\d+\.?\d*/g).map(Number);
+      nums.some(function (n) { return Math.abs(n - crossingX) < 0.1; }).should.equal(true);
+    });
+  });
+
+  it('breaks the fill and skips the label for non-finite hourly values', function () {
+    var scheduled = new Array(24).fill(1);
+    var actual = new Array(24).fill(1);
+    actual[3] = 1.5;
+    actual[4] = null;
+    actual[5] = 1.5;
+    charts.renderBasalDeltaChart('#chart', { scheduledHourly: scheduled, actualHourly: actual, pumpDays: 5 });
+    var d = filled(charts.COLORS.hyper)[0].getAttribute('d');
+    (d.match(/M/g) || []).length.should.equal(2);
+    var perHour = [];
+    for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: 0.8, direction: 1, signalDays: 3 });
+    var delta = new Array(24).fill(0.1);
+    delta[4] = NaN;
+    charts.renderPumpActionHotspot('#chart', { perHour: perHour, hotspots: [3, 4], pumpDays: 5, deltaUnitsPerHour: delta }, {});
+    var text = env.window.document.getElementById('chart').textContent;
+    text.should.containEql('+0.10');
+    text.should.not.containEql('NaN');
   });
 
   it('omits the delta row without deltaUnitsPerHour', function () {
