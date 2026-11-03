@@ -615,4 +615,471 @@ describe('pump_analysis recommendations', function () {
       });
     });
   });
+  describe('factor_recommendations', function () {
+    var bc = require('../lib/report_plugins/pump_analysis/bolus_classifier');
+    var fr = require('../lib/report_plugins/pump_analysis/factor_recommendations');
+    var rules = require('../lib/report_plugins/pump_analysis/recommendation_rules');
+    var glucoseUnits = require('../lib/report_plugins/pump_analysis/glucose_units');
+
+    var MIN = 60 * 1000;
+    var HOUR = 60 * MIN;
+    var OFFSET_MIN = 60; // local = UTC + 1h
+    var DAYS = 8;
+
+    function storeWith (extra) {
+      return Object.assign({
+        units: 'mg/dl'
+        , basal: [{ time: '00:00', value: 0.8 }]
+        , carbratio: [{ time: '00:00', value: 10 }]
+        , sens: [{ time: '00:00', value: 45 }]
+      }, extra || {});
+    }
+
+    function dayKey (dayIdx) {
+      var d = new Date(Date.UTC(2026, 9, 1 + dayIdx));
+      return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+    }
+    function at (dayIdx, hour, minute) {
+      return Date.UTC(2026, 9, 1 + dayIdx, hour, minute || 0) - OFFSET_MIN * MIN;
+    }
+    function iso (ms) { return new Date(ms).toISOString(); }
+    function tempBasal (dayIdx, hour, minute, durationMin, rate) {
+      var ms = at(dayIdx, hour, minute);
+      return { eventType: 'Temp Basal', created_at: iso(ms), mills: ms, absolute: rate, duration: durationMin, utcOffset: OFFSET_MIN };
+    }
+    function bolusAt (dayIdx, hour, minute, insulin, extra) {
+      var ms = at(dayIdx, hour, minute);
+      return Object.assign({ eventType: 'Correction Bolus', created_at: iso(ms), mills: ms, utcOffset: OFFSET_MIN, insulin: insulin }, extra || {});
+    }
+    function mealAt (dayIdx, hour, minute, insulin, carbs) {
+      return bolusAt(dayIdx, hour, minute, insulin, { eventType: 'Meal Bolus', carbs: carbs });
+    }
+    function carbsAt (dayIdx, hour, minute, carbs) {
+      var ms = at(dayIdx, hour, minute);
+      return { eventType: 'Carb Correction', created_at: iso(ms), mills: ms, utcOffset: OFFSET_MIN, carbs: carbs };
+    }
+    function autoAt (dayIdx, hour, minute, insulin) {
+      return bolusAt(dayIdx, hour, minute, insulin, { notes: 'Automatic Bolus' });
+    }
+
+    // Piecewise-linear BG over [ms, sgv] points; flat before the first and after the last.
+    function ramp (points) {
+      return function bgAt (ms) {
+        if (ms <= points[0][0]) return points[0][1];
+        for (var i = 1; i < points.length; i++) {
+          if (ms <= points[i][0]) {
+            var a = points[i - 1];
+            var b = points[i];
+            return a[1] + (b[1] - a[1]) * (ms - a[0]) / (b[0] - a[0]);
+          }
+        }
+        return points[points.length - 1][1];
+      };
+    }
+
+    // Readings every 5 min; bgFn(ms) returns the value or null to drop it. Default flat 120.
+    function readings (bgFn) {
+      var byDay = {};
+      for (var di = -1; di <= DAYS; di++) {
+        var key = dayKey(di);
+        byDay[key] = [];
+        for (var m = 0; m < 24 * 60; m += 5) {
+          var ms = at(di, Math.floor(m / 60), m % 60);
+          var v = bgFn ? bgFn(ms) : 120;
+          if (v === null) continue;
+          byDay[key].push({ mills: ms, sgv: v === undefined ? 120 : v });
+        }
+      }
+      return byDay;
+    }
+    function flatten (byDay) {
+      var all = [];
+      Object.keys(byDay).forEach(function eachDay (k) { all = all.concat(byDay[k]); });
+      return all.sort(function byMills (a, b) { return a.mills - b.mills; });
+    }
+    // Temp basal at the profile rate on every day so each day is pump-covered without deviation.
+    function pumpDays () {
+      var list = [];
+      for (var di = -1; di <= DAYS; di++) list.push(tempBasal(di, 0, 0, 30, 0.8));
+      return list;
+    }
+    function pumpKeys () {
+      var keys = [];
+      for (var di = 0; di < DAYS; di++) keys.push(dayKey(di));
+      return keys;
+    }
+    function input (opts) {
+      var treatments = pumpDays().concat(opts.treatments || []);
+      var byDay = opts.readingsByDay || readings(opts.bg);
+      return {
+        treatments: treatments
+        , readingsByDay: byDay
+        , pumpDayKeys: opts.pumpDayKeys || pumpKeys()
+        , profile: {}
+        , profileStore: opts.profileStore || storeWith()
+        , classified: bc.classifyUserBoluses(treatments, flatten(byDay))
+        , slots: rules.MEAL_SLOTS
+      };
+    }
+    function meals (opts) { return fr.computeMealCases(input(opts)); }
+    function corrections (opts) { return fr.computeCorrectionCases(input(opts)); }
+
+    describe('computeMealCases', function () {
+      it('should give effectiveRatio 10 and d 0 for 60 g, 6 U, profile 10 and flat BG', function () {
+        var cases = meals({ treatments: [mealAt(0, 12, 0, 6, 60)] });
+        cases.length.should.equal(1);
+        var c = cases[0];
+        c.slot.should.equal('lunch');
+        c.dateKey.should.equal(dayKey(0));
+        c.mills.should.equal(at(0, 12, 0));
+        c.carbs.should.equal(60);
+        c.bolusU.should.equal(6);
+        c.startBg.should.equal(120);
+        c.bg2h.should.equal(120);
+        c.bg4h.should.equal(120);
+        c.profileRatio.should.equal(10);
+        c.effectiveRatio.should.be.approximately(10, 1e-6);
+        c.d.should.be.approximately(0, 1e-6);
+        c.curve.length.should.equal(49);
+        c.curve[0].should.eql({ min: 0, sgv: 120 });
+        c.curve[48].min.should.equal(240);
+      });
+
+      it('should add a residual correction of +2 U for 120 to 210 with sens 45', function () {
+        var bg = ramp([[at(0, 12, 0), 120], [at(0, 16, 0), 210]]);
+        var c = meals({ treatments: [mealAt(0, 12, 0, 6, 60)], bg: bg })[0];
+        c.bg4h.should.be.approximately(210, 1e-6);
+        c.effectiveRatio.should.be.approximately(7.5, 1e-6);
+        c.d.should.be.approximately(1 / 3, 1e-6);
+      });
+
+      it('should report peak, peak minute and the 2 h value', function () {
+        var bg = ramp([[at(0, 12, 0), 120], [at(0, 13, 0), 210], [at(0, 16, 0), 120]]);
+        var c = meals({ treatments: [mealAt(0, 12, 0, 6, 60)], bg: bg })[0];
+        c.peakBg.should.be.approximately(210, 1e-6);
+        c.peakMin.should.equal(60);
+        c.bg2h.should.be.approximately(180, 1e-6);
+        c.curve[12].should.eql({ min: 60, sgv: 210 });
+      });
+
+      it('should count the net basal deviation pro rata per touched hour', function () {
+        // 1.8 U/h over profile 0.8 in hour 12 (+1 U); the window covers half of it.
+        var t = [mealAt(0, 12, 30, 6, 60), tempBasal(0, 12, 0, 60, 1.8)];
+        var c = meals({ treatments: t })[0];
+        c.effectiveRatio.should.be.approximately(60 / 6.5, 1e-6);
+      });
+
+      it('should count auto boluses and other user boluses in the window', function () {
+        var t = [mealAt(0, 12, 0, 6, 60), autoAt(0, 13, 0, 0.5), bolusAt(0, 14, 0, 1)];
+        var c = meals({ treatments: t })[0];
+        c.bolusU.should.equal(6);
+        c.effectiveRatio.should.be.approximately(60 / 7.5, 1e-6);
+      });
+
+      it('should drop a case whose denominator is not positive', function () {
+        // 1 U, BG 200 to 110 with sens 45: residual -2 U, denominator -1.
+        var bg = ramp([[at(0, 12, 0), 200], [at(0, 16, 0), 110]]);
+        var cases = meals({ treatments: [mealAt(0, 12, 0, 1, 20)], bg: bg });
+        cases.length.should.equal(0);
+        cases.skipped.nonPositive.should.equal(1);
+      });
+
+      it('should drop both meals when a second meal follows within 4 h', function () {
+        var t = [mealAt(0, 12, 0, 6, 60), mealAt(0, 14, 0, 3, 30), mealAt(1, 12, 0, 6, 60)];
+        var cases = meals({ treatments: t });
+        cases.length.should.equal(1);
+        cases[0].dateKey.should.equal(dayKey(1));
+        cases.skipped.otherMeal.should.equal(2);
+      });
+
+      it('should keep a meal whose neighbour is exactly 4 h away', function () {
+        var t = [mealAt(0, 12, 0, 6, 60), mealAt(0, 16, 0, 3, 30)];
+        meals({ treatments: t }).length.should.equal(1);
+      });
+
+      it('should drop a meal followed by a separate carb entry within 4 h', function () {
+        var t = [mealAt(0, 12, 0, 6, 60), carbsAt(0, 14, 0, 15)];
+        meals({ treatments: t }).length.should.equal(0);
+      });
+
+      it('should drop a meal with less than 80 % CGM coverage', function () {
+        // 10 of 48 readings missing -> 79 %.
+        var bg = function drop (ms) { return ms >= at(0, 13, 0) && ms < at(0, 13, 50) ? null : 120; };
+        var cases = meals({ treatments: [mealAt(0, 12, 0, 6, 60)], bg: bg });
+        cases.length.should.equal(0);
+        cases.skipped.lowCoverage.should.equal(1);
+      });
+
+      it('should keep a meal with 39 of 48 readings', function () {
+        var bg = function drop (ms) { return ms >= at(0, 13, 0) && ms < at(0, 13, 45) ? null : 120; };
+        meals({ treatments: [mealAt(0, 12, 0, 6, 60)], bg: bg }).length.should.equal(1);
+      });
+
+      it('should never treat a dawn bolus as a meal', function () {
+        var cases = meals({ treatments: [bolusAt(0, 6, 30, 1.2, { carbs: 6 })] });
+        cases.length.should.equal(0);
+      });
+
+      it('should ignore a dawn bolus and its carbs inside a meal window', function () {
+        var t = [mealAt(0, 6, 0, 3, 30), bolusAt(0, 7, 30, 1, { carbs: 6 })];
+        var cases = meals({ treatments: t });
+        cases.length.should.equal(1);
+        cases[0].slot.should.equal('breakfast');
+        cases[0].effectiveRatio.should.be.approximately(10, 1e-6);
+      });
+
+      it('should yield no case for a meal outside the slots', function () {
+        meals({ treatments: [mealAt(0, 15, 30, 6, 60)] }).length.should.equal(0);
+      });
+
+      it('should drop the case when the carb ratio is missing or not positive', function () {
+        var t = [mealAt(0, 12, 0, 6, 60)];
+        meals({ treatments: t, profileStore: storeWith({ carbratio: [{ time: '00:00', value: 0 }] }) }).length.should.equal(0);
+        var noCr = storeWith();
+        delete noCr.carbratio;
+        var cases = meals({ treatments: t, profileStore: noCr });
+        cases.length.should.equal(0);
+        cases.skipped.noRatio.should.equal(1);
+      });
+
+      it('should drop the case when sens is missing', function () {
+        var noSens = storeWith();
+        delete noSens.sens;
+        var cases = meals({ treatments: [mealAt(0, 12, 0, 6, 60)], profileStore: noSens });
+        cases.length.should.equal(0);
+        cases.skipped.noSens.should.equal(1);
+      });
+
+      it('should drop the case when a pump user has no basal data for the window day', function () {
+        var t = [mealAt(0, 12, 0, 6, 60)];
+        var inp = input({ treatments: t });
+        inp.treatments = inp.treatments.filter(function notDay0 (x) { return !(x.eventType === 'Temp Basal' && x.mills === at(0, 0, 0)); });
+        var cases = fr.computeMealCases(inp);
+        cases.length.should.equal(0);
+        cases.skipped.noPumpBasal.should.equal(1);
+      });
+
+      it('should assume scheduled basal without any pump days', function () {
+        var inp = input({ treatments: [mealAt(0, 12, 0, 6, 60)], pumpDayKeys: [] });
+        inp.pumpDayKeys = [];
+        fr.computeMealCases(inp)[0].effectiveRatio.should.be.approximately(10, 1e-6);
+      });
+    });
+
+    describe('summarizeMealSlot', function () {
+      function mkCase (d, opts) {
+        opts = opts || {};
+        var start = 120;
+        var curve = [];
+        for (var m = 0; m <= 240; m += 5) curve.push({ min: m, sgv: start });
+        if (opts.late) {
+          curve[12].sgv = start + rules.LATE_BOLUS_RISE_MGDL + 10;
+          curve[48].sgv = start - 10;
+        }
+        if (opts.lateAt) curve[opts.lateAt / 5].sgv = start + rules.LATE_BOLUS_RISE_MGDL + 10;
+        return {
+          slot: 'lunch'
+          , dateKey: '2026-10-01'
+          , mills: 0
+          , carbs: 60
+          , bolusU: 6
+          , startBg: start
+          , peakBg: start
+          , peakMin: 0
+          , bg2h: start
+          , bg4h: curve[48].sgv
+          , effectiveRatio: (opts.ratio || 10) / (1 + d)
+          , profileRatio: opts.ratio || 10
+          , d: d
+          , curve: curve
+        };
+      }
+      function repeat (n, fn) {
+        var list = [];
+        for (var i = 0; i < n; i++) list.push(fn(i));
+        return list;
+      }
+
+      it('should raise insulin for 6 cases with median +0.33: 10 / 1.2 = 8.33 -> 8.5', function () {
+        var s = fr.summarizeMealSlot(repeat(6, function c () { return mkCase(0.33); }));
+        s.slot.should.equal('lunch');
+        s.state.should.equal('up');
+        s.caseCount.should.equal(6);
+        s.sameDirShare.should.equal(1);
+        s.medianD.should.be.approximately(0.33, 1e-9);
+        s.oldRatio.should.equal(10);
+        s.newRatio.should.equal(8.5);
+        s.latePattern.should.eql({ share: 0, count: 0 });
+        (s.unchanged === undefined).should.equal(true);
+      });
+
+      it('should be insufficient with 4 cases', function () {
+        var s = fr.summarizeMealSlot(repeat(4, function c () { return mkCase(0.33); }));
+        s.state.should.equal('insufficient');
+        (s.newRatio === null).should.equal(true);
+        (s.sameDirShare === null).should.equal(true);
+      });
+
+      it('should be insufficient without cases and keep the given slot key', function () {
+        var s = fr.summarizeMealSlot([], 'dinner');
+        s.slot.should.equal('dinner');
+        s.state.should.equal('insufficient');
+        s.caseCount.should.equal(0);
+      });
+
+      it('should report timing for 4 of 6 late-bolus cases instead of a ratio change', function () {
+        var cases = repeat(6, function c (i) { return mkCase(0.33, { late: i < 4 }); });
+        var s = fr.summarizeMealSlot(cases);
+        s.state.should.equal('timing');
+        s.latePattern.count.should.equal(4);
+        s.latePattern.share.should.be.approximately(4 / 6, 1e-9);
+        (s.newRatio === null).should.equal(true);
+      });
+
+      it('should not report timing for 3 of 6 late-bolus cases', function () {
+        var cases = repeat(6, function c (i) { return mkCase(0.33, { late: i < 3 }); });
+        fr.summarizeMealSlot(cases).state.should.equal('up');
+      });
+
+      it('should not count a +90 peak after 90 min as late', function () {
+        var cases = repeat(6, function c () {
+          var k = mkCase(0.33, { lateAt: 95 });
+          k.curve[48].sgv = 110;
+          k.bg4h = 110;
+          return k;
+        });
+        var s = fr.summarizeMealSlot(cases);
+        s.latePattern.count.should.equal(0);
+        s.state.should.equal('up');
+      });
+
+      it('should lower insulin for median -0.3 within 20 % of the old ratio: 10 -> 12', function () {
+        var s = fr.summarizeMealSlot(repeat(6, function c () { return mkCase(-0.3); }));
+        s.state.should.equal('down');
+        s.newRatio.should.equal(12);
+      });
+
+      it('should keep the ratio for a median of 5 %', function () {
+        var s = fr.summarizeMealSlot(repeat(6, function c () { return mkCase(0.05); }));
+        s.state.should.equal('ok');
+        s.newRatio.should.equal(10);
+      });
+
+      it('should keep ratio 2 unchanged when no 0.5 step fits the direction', function () {
+        // 2 / 1.1 = 1.82 rounds to 2.0; 1.5 would be +33 % insulin.
+        var s = fr.summarizeMealSlot(repeat(6, function c () { return mkCase(0.1, { ratio: 2 }); }));
+        s.state.should.equal('up');
+        s.newRatio.should.equal(2);
+        s.unchanged.should.equal(true);
+      });
+
+      it('should lower sameDirShare with neutral cases', function () {
+        var cases = repeat(4, function c () { return mkCase(0.3); }).concat(repeat(2, function c () { return mkCase(0); }));
+        fr.summarizeMealSlot(cases).sameDirShare.should.be.approximately(4 / 6, 1e-9);
+      });
+    });
+
+    describe('computeCorrectionCases', function () {
+      var sens60 = storeWith({ sens: [{ time: '00:00', value: 60 }] });
+      function corrBg (dayIdx) {
+        return ramp([[at(dayIdx, 13, 0), 120], [at(dayIdx, 13, 5), 260], [at(dayIdx, 14, 0), 260], [at(dayIdx, 17, 0), 170], [at(dayIdx, 17, 5), 120]]);
+      }
+
+      it('should measure ISF 45 for 260 to 170 with 2 U against sens 60', function () {
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2)], bg: corrBg(0), profileStore: sens60 });
+        cases.length.should.equal(1);
+        var c = cases[0];
+        c.dateKey.should.equal(dayKey(0));
+        c.mills.should.equal(at(0, 14, 0));
+        c.bolusU.should.equal(2);
+        c.startBg.should.equal(260);
+        c.bg3h.should.equal(170);
+        c.measuredIsf.should.be.approximately(45, 1e-6);
+        c.profileIsf.should.equal(60);
+        c.d.should.be.approximately(1 / 3, 1e-6);
+      });
+
+      it('should count auto boluses in the window', function () {
+        var t = [bolusAt(0, 14, 0, 2), autoAt(0, 15, 0, 0.5)];
+        corrections({ treatments: t, bg: corrBg(0), profileStore: sens60 })[0].measuredIsf.should.be.approximately(36, 1e-6);
+      });
+
+      it('should not measure a fast-rise correction', function () {
+        var bg = ramp([[at(0, 13, 55), 248], [at(0, 14, 0), 260], [at(0, 17, 0), 170]]);
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2)], bg: bg, profileStore: sens60 });
+        cases.length.should.equal(0);
+        cases.skipped.fastRise.should.equal(1);
+      });
+
+      it('should not measure a correction with carbs within 3 h after or before', function () {
+        corrections({ treatments: [bolusAt(0, 14, 0, 2), carbsAt(0, 16, 0, 15)], bg: corrBg(0), profileStore: sens60 }).length.should.equal(0);
+        corrections({ treatments: [bolusAt(0, 14, 0, 2), carbsAt(0, 12, 0, 15)], bg: corrBg(0), profileStore: sens60 }).length.should.equal(0);
+      });
+
+      it('should not measure a correction with another bolus within 3 h', function () {
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2), bolusAt(0, 15, 0, 1)], bg: corrBg(0), profileStore: sens60 });
+        cases.length.should.equal(0);
+        cases.skipped.disturbed.should.be.above(0);
+      });
+
+      it('should not measure a correction with less than 80 % CGM coverage', function () {
+        var base = corrBg(0);
+        var bg = function drop (ms) { return ms >= at(0, 15, 0) && ms < at(0, 15, 40) ? null : base(ms); };
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2)], bg: bg, profileStore: sens60 });
+        cases.length.should.equal(0);
+        cases.skipped.lowCoverage.should.equal(1);
+      });
+
+      it('should drop a correction without a BG drop', function () {
+        var bg = ramp([[at(0, 13, 0), 260], [at(0, 17, 0), 260]]);
+        var cases = corrections({ treatments: [bolusAt(0, 14, 0, 2)], bg: bg, profileStore: sens60 });
+        cases.length.should.equal(0);
+        cases.skipped.nonPositive.should.equal(1);
+      });
+    });
+
+    describe('summarizeCorrections', function () {
+      function sixDays (store) {
+        var t = [];
+        var fns = [];
+        for (var di = 0; di < 6; di++) {
+          t.push(bolusAt(di, 14, 0, 2));
+          fns.push(ramp([[at(di, 13, 0), 120], [at(di, 13, 5), 260], [at(di, 14, 0), 260], [at(di, 17, 0), 170], [at(di, 17, 5), 120]]));
+        }
+        var bg = function multi (ms) {
+          for (var i = 0; i < fns.length; i++) {
+            if (ms >= at(i, 12, 0) && ms <= at(i, 18, 0)) return fns[i](ms);
+          }
+          return 120;
+        };
+        return corrections({ treatments: t, bg: bg, profileStore: store });
+      }
+
+      it('should recommend a stronger factor in mg/dl: 60 -> 50', function () {
+        var s = fr.summarizeCorrections(sixDays(storeWith({ sens: [{ time: '00:00', value: 60 }] })));
+        s.state.should.equal('up');
+        s.caseCount.should.equal(6);
+        s.sameDirShare.should.equal(1);
+        s.medianD.should.be.approximately(1 / 3, 1e-6);
+        s.oldIsf.should.equal(60);
+        s.newIsf.should.equal(50);
+      });
+
+      it('should report oldIsf and newIsf in mmol for a mmol profile', function () {
+        var s = fr.summarizeCorrections(sixDays(storeWith({ units: 'mmol', sens: [{ time: '00:00', value: 3.33 }] })));
+        s.state.should.equal('up');
+        s.oldIsf.should.be.approximately(3.33, 1e-9);
+        // 3.33 mmol = 59.99 mg/dl; / 1.2 = 49.99 -> 50 mg/dl.
+        s.newIsf.should.be.approximately(glucoseUnits.fromMgdl(50, 'mmol'), 1e-9);
+        s.units.should.equal('mmol');
+      });
+
+      it('should be insufficient with fewer than 5 cases', function () {
+        var s = fr.summarizeCorrections([]);
+        s.state.should.equal('insufficient');
+        s.caseCount.should.equal(0);
+        (s.newIsf === null).should.equal(true);
+      });
+    });
+  });
 });
