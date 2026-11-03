@@ -1397,6 +1397,102 @@ describe('pump_analysis recommendations', function () {
         });
       });
     });
+
+    describe('counter-signal over all meals and corrections (R21)', function () {
+      var MORE_WARNING = 'More insulin would fit here, but hypo on %1/%2 days, clarify the cause first';
+
+      function carbsAt (dayIdx, hour, minute, carbs) {
+        var ms = at(dayIdx, hour, minute);
+        return { eventType: 'Carb Correction', created_at: new Date(ms).toISOString(), mills: ms, utcOffset: OFFSET_MIN, carbs: carbs };
+      }
+      function slotCard (res, kind, slot) {
+        return res.cards.filter(function match (c) { return c.kind === kind && (!slot || c.slot === slot); })[0];
+      }
+
+      // 8 lunches at 12:00 (50 g / 5 U, CR 10, ISF 30, no pump). On normal days
+      // BG ends 30 mg/dl high (d +0.2). On hypoDays BG falls to 55 for 30 min
+      // and a 15 g hypo treatment at 14:15 drops the meal as "other meal".
+      function lunchInput (hypoDays) {
+        var t = [];
+        var stats = [];
+        for (var di = 0; di < DAYS; di++) {
+          var hypo = hypoDays.indexOf(di) !== -1;
+          if (di < 8) t.push(bolusAt(di, 12, 0, 5, { eventType: 'Meal Bolus', carbs: 50 }));
+          if (hypo) t.push(carbsAt(di, 14, 15, 15));
+          stats.push({ hypo_episodes: hypo ? [{ start: at(di, 14, 0), end: at(di, 14, 30) }] : [] });
+        }
+        var bg = function lunch (di, h, m) {
+          var t2 = h * 60 + m;
+          if (di < 0 || di >= 8 || t2 < 720 || t2 > 990) return undefined;
+          if (hypoDays.indexOf(di) !== -1) {
+            if (t2 < 840) return 130 - (t2 - 720) * 75 / 120;
+            if (t2 < 870) return 55;
+            return 55 + (t2 - 870) * 75 / 120;
+          }
+          if (t2 <= 780) return 130 + (t2 - 720);
+          return 190 - (t2 - 780) * 30 / 180;
+        };
+        return input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg), dayStats: stats });
+      }
+
+      // 10 corrections of 2 U at 14:00 with BG 250 (ISF 30, no pump). On normal
+      // days BG falls only 40 mg/dl in 3 h (measured 20 per U, d +0.5). On
+      // hypoDays BG falls to 60 and a hypo treatment at 15:40 disturbs the case.
+      function correctionInput (hypoDays) {
+        var t = [];
+        var stats = [];
+        for (var di = 0; di < DAYS; di++) {
+          var hypo = hypoDays.indexOf(di) !== -1;
+          if (di < 10) t.push(bolusAt(di, 14, 0, 2));
+          if (hypo) t.push(carbsAt(di, 15, 40, 15));
+          stats.push({ hypo_episodes: hypo ? [{ start: at(di, 15, 30), end: at(di, 15, 50) }] : [] });
+        }
+        var bg = function corr (di, h, m) {
+          var t2 = h * 60 + m;
+          if (di < 0 || di >= 10 || t2 < 780 || t2 > 1020) return undefined;
+          if (t2 <= 840) return 250;
+          if (hypoDays.indexOf(di) !== -1) {
+            if (t2 < 930) return 250 - (t2 - 840) * 190 / 90;
+            if (t2 < 950) return 60;
+            return undefined;
+          }
+          return 250 - (t2 - 840) * 40 / 180;
+        };
+        return input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg), dayStats: stats });
+      }
+
+      it('should warn instead of suggesting a stronger carb ratio when 3 of 8 lunches end in a hypo', function () {
+        var card = slotCard(engine.buildRecommendations(lunchInput([5, 6, 7])), 'carbratio', 'lunch');
+        card.state.should.equal('warning');
+        card.direction.should.equal('up');
+        reasonOf(card, MORE_WARNING).args.should.eql(['3', '8']);
+        (reasonOf(card, 'No hypo in this period') === undefined).should.equal(true);
+        card.rows.forEach(function noNew (r) { (r.newValue === null).should.equal(true); });
+      });
+
+      it('should downgrade the lunch card and name the hypo when 1 of 8 lunches ends in a hypo', function () {
+        var card = slotCard(engine.buildRecommendations(lunchInput([7])), 'carbratio', 'lunch');
+        card.state.should.equal('up');
+        card.caseCount.should.equal(7);
+        card.confidence.should.equal('medium');
+        reasonOf(card, 'Hypo on %1/%2 days').args.should.eql(['1', '8']);
+      });
+
+      it('should warn instead of suggesting a stronger ISF when 3 corrections end in a treated hypo', function () {
+        var card = slotCard(engine.buildRecommendations(correctionInput([7, 8, 9])), 'isf');
+        card.state.should.equal('warning');
+        card.direction.should.equal('up');
+        reasonOf(card, MORE_WARNING).args.should.eql(['3', '10']);
+        (reasonOf(card, 'No hypo in this period') === undefined).should.equal(true);
+      });
+
+      it('should keep the ISF suggestion with high confidence without any hypo', function () {
+        var card = slotCard(engine.buildRecommendations(correctionInput([])), 'isf');
+        card.state.should.equal('up');
+        card.confidence.should.equal('high');
+        reasonOf(card, 'No hypo in this period').should.be.ok();
+      });
+    });
   });
 });
 
