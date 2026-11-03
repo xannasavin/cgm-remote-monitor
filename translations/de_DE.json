@@ -889,5 +889,11 @@
     "%1 %2, no change possible within %3 %": "%1 %2, keine Änderung möglich innerhalb von %3 %",
     "Not enough data": "Zu wenig Daten",
     "No change": "Keine Änderung",
-    "No factor change": "Keine Faktor-Änderung"
+    "No factor change": "Keine Faktor-Änderung",
+    "Meal Response Curves": "Mahlzeiten-Kurven",
+    "Breakfast": "Frühstück",
+    "Lunch": "Mittagessen",
+    "Dinner": "Abendessen",
+    "Glucose from the meal bolus up to 4 hours later. Thin lines are single meals, the bold line is the median, the green band is your target range.": "Glukose vom Mahlzeiten-Bolus bis 4 Stunden danach. Dünne Linien sind einzelne Mahlzeiten, die dicke Linie ist der Median, das grüne Band ist dein Zielbereich.",
+    "Median peak %1 %2 after %3 min, 4 h value %4 %2 (start %5 %2), %6 meals": "Median-Spitze %1 %2 nach %3 min, 4-h-Wert %4 %2 (Start %5 %2), %6 Mahlzeiten"
 }

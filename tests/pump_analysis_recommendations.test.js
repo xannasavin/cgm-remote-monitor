@@ -1399,3 +1399,35 @@ describe('pump_analysis recommendations', function () {
     });
   });
 });
+
+describe('pump_analysis medianCurve', function () {
+  var fr = require('../lib/report_plugins/pump_analysis/factor_recommendations');
+
+  function curve (values) {
+    return values.map(function toPoint (v, i) { return { min: i * 5, sgv: v }; });
+  }
+
+  it('returns the median per minute over three curves', function () {
+    var m = fr.medianCurve([
+      { curve: curve([100, 150, 200]) }
+      , { curve: curve([120, 130, 220]) }
+      , { curve: curve([110, 170, 180]) }
+    ]);
+    m.should.eql([{ min: 0, sgv: 110 }, { min: 5, sgv: 150 }, { min: 10, sgv: 200 }]);
+  });
+
+  it('uses the available values where curves have gaps and omits minutes without values', function () {
+    var m = fr.medianCurve([
+      { curve: [{ min: 0, sgv: 100 }, { min: 10, sgv: 200 }] }
+      , { curve: [{ min: 0, sgv: 120 }, { min: 5, sgv: 150 }, { min: 10, sgv: 220 }] }
+      , { curve: [{ min: 20, sgv: 90 }] }
+    ]);
+    m.should.eql([{ min: 0, sgv: 110 }, { min: 5, sgv: 150 }, { min: 10, sgv: 210 }, { min: 20, sgv: 90 }]);
+  });
+
+  it('returns an empty array for no cases, missing curves or non-finite values', function () {
+    fr.medianCurve([]).should.eql([]);
+    fr.medianCurve(null).should.eql([]);
+    fr.medianCurve([{}, { curve: [{ min: 0, sgv: NaN }, { min: 5, sgv: null }] }]).should.eql([]);
+  });
+});

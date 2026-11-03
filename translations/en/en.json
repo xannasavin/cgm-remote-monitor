@@ -888,4 +888,10 @@
     ,"Not enough data":"Not enough data"
     ,"No change":"No change"
     ,"No factor change":"No factor change"
+    ,"Meal Response Curves":"Meal Response Curves"
+    ,"Breakfast":"Breakfast"
+    ,"Lunch":"Lunch"
+    ,"Dinner":"Dinner"
+    ,"Glucose from the meal bolus up to 4 hours later. Thin lines are single meals, the bold line is the median, the green band is your target range.":"Glucose from the meal bolus up to 4 hours later. Thin lines are single meals, the bold line is the median, the green band is your target range."
+    ,"Median peak %1 %2 after %3 min, 4 h value %4 %2 (start %5 %2), %6 meals":"Median peak %1 %2 after %3 min, 4 h value %4 %2 (start %5 %2), %6 meals"
 }

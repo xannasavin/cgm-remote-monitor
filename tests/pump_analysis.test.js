@@ -1061,3 +1061,116 @@ describe('pump_analysis directional basal delta and hotspot units', function () 
     env.window.document.getElementById('chart').textContent.should.not.containEql('+0.');
   });
 });
+
+describe('pump_analysis meal response curves', function () {
+  var createSecureDOM = require('./fixtures/secure-jsdom').createSecureDOM;
+  var domGlobals = require('./fixtures/dom-globals');
+  var DOM_GLOBALS = ['window', 'document', 'navigator', '$', 'jQuery'];
+  var env;
+  var state;
+  var previousGlobals;
+  var charts;
+  var fr;
+
+  function clearPluginModules () {
+    Object.keys(require.cache).forEach(function (modulePath) {
+      if (modulePath.replace(/\\/g, '/').includes('/lib/report_plugins/')) {
+        delete require.cache[modulePath];
+      }
+    });
+  }
+
+  beforeEach(function () {
+    previousGlobals = Object.fromEntries(DOM_GLOBALS.map(function (name) {
+      return [name, Object.getOwnPropertyDescriptor(global, name)];
+    }));
+    clearPluginModules();
+    env = createSecureDOM('<!DOCTYPE html><html><body><div id="chart"></div></body></html>');
+    state = domGlobals.installDomGlobals(env);
+    charts = require('../lib/report_plugins/pump_analysis/charts');
+    charts.setTranslate(function (s) { return s; });
+    fr = require('../lib/report_plugins/pump_analysis/factor_recommendations');
+  });
+
+  afterEach(function () {
+    clearPluginModules();
+    domGlobals.restoreDomGlobals(state);
+    DOM_GLOBALS.forEach(function (name) {
+      if (previousGlobals[name]) {
+        Object.defineProperty(global, name, previousGlobals[name]);
+      } else {
+        delete global[name];
+      }
+    });
+  });
+
+  function mealCase (offset, peak) {
+    var curve = [];
+    for (var m = 0; m <= 240; m += 5) {
+      curve.push({ min: m, sgv: 100 + offset + (m <= 60 ? m * peak / 60 : peak * (240 - m) / 180) });
+    }
+    return { slot: 'lunch', startBg: 100 + offset, peakBg: 100 + offset + peak, peakMin: 60, bg4h: 100 + offset, curve: curve };
+  }
+
+  function threeCases () { return [mealCase(0, 80), mealCase(10, 100), mealCase(20, 120)]; }
+
+  function doc () { return env.window.document; }
+
+  it('draws one thin path per case plus a bold median path and a summary', function () {
+    var cases = threeCases();
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: cases, medianCurve: fr.medianCurve(cases), targetLow: 70, targetHigh: 180, units: 'mg/dL'
+    });
+    doc().querySelectorAll('#chart path.cgm-meal-line').length.should.equal(3);
+    doc().querySelectorAll('#chart path.cgm-meal-median').length.should.equal(1);
+    var summary = doc().querySelector('#chart .cgm-meal-summary').textContent;
+    summary.should.containEql('Median peak 210 mg/dL after 60 min');
+    summary.should.containEql('4 h value 110 mg/dL (start 110 mg/dL)');
+    summary.should.containEql('3 meals');
+  });
+
+  it('shows the summary values in mmol/L when units are mmol', function () {
+    var cases = threeCases();
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: cases, medianCurve: fr.medianCurve(cases), targetLow: 3.9, targetHigh: 10, units: 'mmol'
+    });
+    doc().querySelector('#chart .cgm-meal-summary').textContent.should.containEql('Median peak 11.7 mmol/L');
+  });
+
+  it('renders the empty state for zero cases', function () {
+    charts.renderMealCurveChart('#chart', {
+      slot: 'lunch', cases: [], medianCurve: [], targetLow: 70, targetHigh: 180, units: 'mg/dL'
+    });
+    doc().querySelectorAll('#chart path.cgm-meal-line').length.should.equal(0);
+    doc().getElementById('chart').textContent.should.equal('Not enough data');
+  });
+
+  it('renders the empty state when options are missing', function () {
+    charts.renderMealCurveChart('#chart');
+    doc().getElementById('chart').textContent.should.equal('Not enough data');
+  });
+
+  it('renderStats renders three meal curve placeholders after the insulin distribution when pumpExtras is given', function () {
+    var statsRenderer = require('../lib/report_plugins/pump_analysis/stats_renderer');
+    var stats = { basal_source: 'pump', coverage: { pump_days: 2, total_days: 2 }, bolus_distribution: {} };
+    var html = statsRenderer.renderStats({}, [], {}, [], stats, null, { recommendations: null, mealCases: [] });
+    ['breakfast', 'lunch', 'dinner'].forEach(function (slot) {
+      html.should.containEql('id="aiMealCurve_' + slot + '"');
+    });
+    html.indexOf('aiMealCurve_breakfast').should.be.above(html.indexOf('aiInsulinDistributionChart'));
+    statsRenderer.renderStats({}, [], {}, [], stats, null, null).should.not.containEql('aiMealCurve_');
+  });
+
+  it('renderCharts fills the meal curve containers and shows the empty state without mealCases', function () {
+    var plugin = require('../lib/report_plugins/pump_analysis')({});
+    var cases = threeCases();
+    env.window.document.body.innerHTML = '<div id="pumpAnalysisStatsArea">'
+      + '<div id="aiMealCurve_breakfast"></div><div id="aiMealCurve_lunch"></div><div id="aiMealCurve_dinner"></div></div>';
+    var base = { cgmData: { days: [], meta: { units: 'mg/dL', target_low: 70, target_high: 180 } }, periodStats: {}, dayStats: [] };
+    plugin.renderCharts(Object.assign({ pumpExtras: { mealCases: cases } }, base));
+    doc().querySelectorAll('#aiMealCurve_lunch path.cgm-meal-line').length.should.equal(3);
+    doc().getElementById('aiMealCurve_breakfast').textContent.should.equal('Not enough data');
+    plugin.renderCharts(Object.assign({ pumpExtras: {} }, base));
+    doc().getElementById('aiMealCurve_lunch').textContent.should.equal('Not enough data');
+  });
+});
