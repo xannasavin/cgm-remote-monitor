@@ -901,3 +901,92 @@ describe('pump_analysis in the report page', function () {
     names(true).slice(-3).should.eql(['loopalyzer', 'pump_analysis', 'ai_eval']);
   });
 });
+
+describe('pump_analysis directional basal delta and hotspot units', function () {
+  var createSecureDOM = require('./fixtures/secure-jsdom').createSecureDOM;
+  var domGlobals = require('./fixtures/dom-globals');
+  var DOM_GLOBALS = ['window', 'document', 'navigator', '$', 'jQuery'];
+  var env;
+  var state;
+  var previousGlobals;
+  var charts;
+
+  function clearPluginModules () {
+    Object.keys(require.cache).forEach(function (modulePath) {
+      if (modulePath.replace(/\\/g, '/').includes('/lib/report_plugins/')) {
+        delete require.cache[modulePath];
+      }
+    });
+  }
+
+  beforeEach(function () {
+    previousGlobals = Object.fromEntries(DOM_GLOBALS.map(function (name) {
+      return [name, Object.getOwnPropertyDescriptor(global, name)];
+    }));
+    clearPluginModules();
+    env = createSecureDOM('<!DOCTYPE html><html><body><div id="chart"></div></body></html>');
+    state = domGlobals.installDomGlobals(env);
+    charts = require('../lib/report_plugins/pump_analysis/charts');
+    charts.setTranslate(function (s) { return s; });
+  });
+
+  afterEach(function () {
+    clearPluginModules();
+    domGlobals.restoreDomGlobals(state);
+    DOM_GLOBALS.forEach(function (name) {
+      if (previousGlobals[name]) {
+        Object.defineProperty(global, name, previousGlobals[name]);
+      } else {
+        delete global[name];
+      }
+    });
+  });
+
+  function filled (color) {
+    return Array.prototype.filter.call(env.window.document.querySelectorAll('#chart path'), function (p) {
+      return p.getAttribute('fill') === color;
+    });
+  }
+
+  it('uses a basalBelow colour distinct from the basal teal', function () {
+    charts.COLORS.basalBelow.should.equal('#1f6feb');
+    charts.COLORS.basalBelow.should.not.equal(charts.COLORS.basalActual);
+  });
+
+  it('fills red where actual exceeds scheduled and blue where it is below', function () {
+    var scheduled = new Array(24).fill(1);
+    var actual = new Array(24).fill(1);
+    actual[3] = 1.5;
+    actual[22] = 0.5;
+    charts.renderBasalDeltaChart('#chart', { scheduledHourly: scheduled, actualHourly: actual, pumpDays: 5 });
+    filled(charts.COLORS.hyper).length.should.equal(1);
+    filled(charts.COLORS.basalBelow).length.should.equal(1);
+  });
+
+  it('draws only one fill when the delta has a single direction', function () {
+    var scheduled = new Array(24).fill(1);
+    var actual = new Array(24).fill(1);
+    actual[3] = 1.5;
+    charts.renderBasalDeltaChart('#chart', { scheduledHourly: scheduled, actualHourly: actual, pumpDays: 5 });
+    filled(charts.COLORS.hyper).length.should.equal(1);
+    filled(charts.COLORS.basalBelow).length.should.equal(0);
+  });
+
+  it('shows the per-hour unit delta in the hotspot', function () {
+    var perHour = [];
+    for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: h === 3 ? 0.8 : 0, direction: 1, signalDays: h === 3 ? 4 : 0 });
+    var delta = new Array(24).fill(0);
+    delta[3] = 0.3;
+    charts.renderPumpActionHotspot('#chart', {
+      perHour: perHour, hotspots: [3], pumpDays: 5, deltaUnitsPerHour: delta
+    }, {});
+    env.window.document.getElementById('chart').textContent.should.containEql('+0.30');
+  });
+
+  it('omits the delta row without deltaUnitsPerHour', function () {
+    var perHour = [];
+    for (var h = 0; h < 24; h++) perHour.push({ hour: h, intensity: 0, direction: 1, signalDays: 0 });
+    charts.renderPumpActionHotspot('#chart', { perHour: perHour, hotspots: [], pumpDays: 5 }, {});
+    env.window.document.getElementById('chart').textContent.should.not.containEql('+0.');
+  });
+});
