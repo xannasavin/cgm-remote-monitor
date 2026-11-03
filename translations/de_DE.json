@@ -779,5 +779,17 @@
     "Chart unavailable.": "Diagramm nicht verfügbar.",
     "AI Evaluation": "KI-Auswertung",
     "Charts and the full statistics for this period are in the Pump Analysis tab.": "Diagramme und die vollständige Statistik für diesen Zeitraum stehen im Tab Pumpen-Analyse.",
-    "AI analysis is limited to 14 days. The statistics are in the Pump Analysis tab. Please reduce the date range to enable AI analysis.": "Die KI-Auswertung ist auf 14 Tage begrenzt. Die Statistik steht im Tab Pumpen-Analyse. Bitte den Zeitraum verkleinern, um die KI-Auswertung zu aktivieren."
+    "AI analysis is limited to 14 days. The statistics are in the Pump Analysis tab. Please reduce the date range to enable AI analysis.": "Die KI-Auswertung ist auf 14 Tage begrenzt. Die Statistik steht im Tab Pumpen-Analyse. Bitte den Zeitraum verkleinern, um die KI-Auswertung zu aktivieren.",
+    "Meaning": "Bedeutung",
+    "GMI": "GMI",
+    "Mean of all sensor values.": "Mittelwert aller Sensorwerte.",
+    "Middle value: half of the readings are higher, half lower.": "Mittlerer Wert: die Hälfte der Werte liegt darüber, die Hälfte darunter.",
+    "Glucose Management Indicator: HbA1c estimated from the average. Roughly comparable to the lab value.": "Aus dem Durchschnitt geschätzter HbA1c-Wert. Grob vergleichbar mit dem Laborwert.",
+    "Typical distance of the values from the mean.": "Typischer Abstand der Werte vom Mittelwert.",
+    "Coefficient of variation: how much glucose varies relative to the mean. Below 36 % is considered stable.": "Variationskoeffizient: wie stark der BZ im Verhältnis zum Mittelwert schwankt. Unter 36 % gilt als stabil.",
+    "Mean height of the large swings (peak to trough). Small wiggles do not count. Lower is calmer.": "Mittlere Höhe der großen Ausschläge (Spitze bis Tal). Kleine Wackler zählen nicht mit. Kleiner ist ruhiger.",
+    "Share of time between %1 and %2 %3.": "Anteil der Zeit zwischen %1 und %2 %3.",
+    "Share of time below %1 %2.": "Anteil der Zeit unter %1 %2.",
+    "Share of time above %1 %2.": "Anteil der Zeit über %1 %2.",
+    "< %1 (rough)": "< %1 (grob)"
 }

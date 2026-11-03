@@ -83,6 +83,38 @@ describe('pump_analysis', function () {
     });
   });
 
+  describe('glucose_units', function () {
+    var gu = require('../lib/report_plugins/pump_analysis/glucose_units');
+
+    it('computeGmi', function () {
+      gu.computeGmi(153.6).should.equal(7.0);
+      (gu.computeGmi(null) === null).should.equal(true);
+    });
+
+    it('toMgdl / fromMgdl', function () {
+      gu.toMgdl(8.5, 'mmol').should.be.approximately(153.1, 0.2);
+      gu.toMgdl(8.5, 'mmol/L').should.be.approximately(153.1, 0.2);
+      gu.toMgdl(150, 'mg/dl').should.equal(150);
+      gu.fromMgdl(153.1, 'mmol').should.be.approximately(8.5, 0.01);
+      gu.fromMgdl(150, 'mg/dl').should.equal(150);
+    });
+  });
+
+  describe('render_utils tableCells', function () {
+    var ru = require('../lib/report_plugins/pump_analysis/render_utils');
+
+    it('escapes text and whitelists classes', function () {
+      var html = ru.tableCells({
+        head: ['A']
+        , rows: [[{ text: '<b>x</b>', cls: 'cgm-ok' }], [{ text: 'y', cls: 'evil' }], ['plain']]
+      });
+      html.should.containEql('&lt;b&gt;x&lt;/b&gt;');
+      html.should.containEql('class="cgm-ok"');
+      html.should.not.containEql('evil');
+      html.should.containEql('<td>plain</td>');
+    });
+  });
+
   describe('stats_renderer', function () {
     var statsRenderer = require('../lib/report_plugins/pump_analysis/stats_renderer');
 
@@ -485,9 +517,49 @@ describe('pump_analysis', function () {
         tbody.match(/<tr>/g).should.have.length(8);
       });
 
-      it('renderStats embeds renderPeriodSummary', function () {
+      it('short variant keeps 2 columns', function () {
+        var html = statsRenderer.renderPeriodSummary(p, meta);
+        html.should.not.containEql('Meaning');
+        html.match(/<th /g).should.have.length(2);
+      });
+
+      describe('explained', function () {
+        var ex = function (stats) {
+          return statsRenderer.renderPeriodSummary(Object.assign({}, p, stats), meta, { explained: true });
+        };
+        function rowOf (html, label) {
+          var rows = html.match(/<tr>.*?<\/tr>/g);
+          return rows.filter(function (r) { return r.indexOf(label) !== -1; })[0];
+        }
+
+        it('has 9 rows and the 4 column head', function () {
+          var html = ex({});
+          var tbody = html.substring(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
+          tbody.match(/<tr>/g).should.have.length(9);
+          var head = html.substring(html.indexOf('<thead>'), html.indexOf('</thead>'));
+          head.match(/<th [^>]*>([^<]*)<\/th>/g).map(function (h) { return h.replace(/<[^>]*>/g, ''); })
+            .should.eql(['Metric', 'Value', 'Target', 'Meaning']);
+          html.should.containEql('GMI');
+        });
+
+        it('marks TIR ok and CV warn, leaves MAGE and SD uncolored', function () {
+          var html = ex({ tir_pct: 72, cv: 40 });
+          rowOf(html, 'Time in Range').should.containEql('cgm-ok');
+          rowOf(html, '>CV<').should.containEql('cgm-warn');
+          rowOf(html, 'MAGE').should.not.match(/cgm-(ok|warn)/);
+          rowOf(html, 'Standard Deviation').should.not.match(/cgm-(ok|warn)/);
+        });
+
+        it('computes GMI from the average', function () {
+          rowOf(ex({ average: 153.6 }), 'GMI').should.containEql('7.0 %');
+        });
+      });
+
+      it('renderStats uses the explained variant', function () {
         var m = { from: '2026-03-01', to: '2026-03-07', days: 7, units: 'mg/dL' };
-        statsRenderer.renderStats(p, [], m).should.containEql(statsRenderer.renderPeriodSummary(p, m));
+        var html = statsRenderer.renderStats(p, [], m);
+        html.should.containEql('Meaning');
+        html.should.containEql(statsRenderer.renderPeriodSummary(p, m, { explained: true }));
       });
     });
   });
