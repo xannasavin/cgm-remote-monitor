@@ -596,6 +596,14 @@ describe('pump_analysis', function () {
         html.should.containEql('Meaning');
         html.should.containEql(statsRenderer.renderPeriodSummary(p, m, { explained: true }));
       });
+
+      it('wraps the explained table in a horizontally scrollable container', function () {
+        var m = { from: '2026-03-01', to: '2026-03-07', days: 7, units: 'mg/dl' };
+        var html = statsRenderer.renderStats(p, [], m);
+        html.should.containEql('<div class="cgm-table-scroll">' + statsRenderer.renderPeriodSummary(p, m, { explained: true }) + '</div>');
+        require('../lib/report_plugins/pump_analysis/styles').REPORT_CSS
+          .should.match(/\.cgm-table-scroll \{[^}]*overflow-x: auto/);
+      });
     });
   });
 });
@@ -1139,8 +1147,8 @@ describe('pump_analysis meal response curves', function () {
     doc().querySelectorAll('#chart path.cgm-meal-line').length.should.equal(3);
     doc().querySelectorAll('#chart path.cgm-meal-median').length.should.equal(1);
     var summary = doc().querySelector('#chart .cgm-meal-summary').textContent;
-    summary.should.containEql('Median peak 210 mg/dL after 60 min');
-    summary.should.containEql('4 h value 110 mg/dL (start 110 mg/dL)');
+    summary.should.containEql('Median peak 210 mg/dl after 60 min');
+    summary.should.containEql('4 h value 110 mg/dl (start 110 mg/dl)');
     summary.should.containEql('3 meals');
   });
 
