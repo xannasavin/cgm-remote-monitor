@@ -160,7 +160,40 @@ describe('pump_analysis', function () {
       dataProcessor.should.have.property('prepareCgmData').which.is.a.Function();
     });
 
+    describe('selectProfileForRange', function () {
+      it('picks the latest profile starting on or before the last day, from an unsorted list', function () {
+        var after = { startDate: '2026-11-10' };
+        var valid = { startDate: '2026-10-01' };
+        var older = { startDate: '2026-01-01' };
+        (dataProcessor.selectProfileForRange([after, older, valid], '2026-11-03') === valid).should.be.true();
+        (dataProcessor.selectProfileForRange([after, valid], '2026-11-03') === valid).should.be.true();
+      });
+
+      it('picks the earliest profile when all start after the end date', function () {
+        var a = { startDate: '2026-12-10' };
+        var b = { startDate: '2026-11-10' };
+        (dataProcessor.selectProfileForRange([a, b], '2026-11-03') === b).should.be.true();
+      });
+
+      it('returns null for empty or missing profile lists', function () {
+        (dataProcessor.selectProfileForRange([], '2026-11-03') === null).should.be.true();
+        (dataProcessor.selectProfileForRange(null, '2026-11-03') === null).should.be.true();
+      });
+    });
+
     describe('prepareCgmData', function () {
+      it('uses the profile valid at report end for raw_profile', function () {
+        var store = { D: { basal: [], carbratio: [], sens: [], target_low: [], target_high: [] } };
+        var after = { startDate: '2099-01-01', defaultProfile: 'D', store: store };
+        var valid = { startDate: '2026-01-01', defaultProfile: 'D', store: store };
+        var result = dataProcessor.prepareCgmData({
+          '2026-03-15': { sgv: [{ mills: 1710460800000, sgv: 120 }], treatments: [] }
+          , profiles: [after, valid]
+          , alldays: 1
+        }, {}, {});
+        (result.cgmData.raw_profile === valid).should.be.true();
+      });
+
       it('should extract days with compact JSON and compute stats', function () {
         var datastorage = {
           '2026-03-15': {
