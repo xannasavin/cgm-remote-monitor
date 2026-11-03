@@ -548,6 +548,70 @@ describe('pump_analysis recommendations', function () {
         blocks.length.should.equal(1);
         blocks[0].state.should.equal('insufficient');
         blocks[0].caseCount.should.equal(0);
+        (blocks[0].sameDirShare === null).should.equal(true);
+      });
+
+      it('should set sameDirShare null for an insufficient block with cases', function () {
+        var b = blockAt(br.buildBasalBlocks(mk(10, repeat(0.5, 4)), store), 10)[0];
+        b.state.should.equal('insufficient');
+        (b.sameDirShare === null).should.equal(true);
+      });
+
+      describe('direction guard on rounding', function () {
+        function rowFor (rate, d) {
+          var flat = { basal: [{ time: '00:00', value: rate }] };
+          var blocks = br.buildBasalBlocks(mk(10, repeat(d, 5)), flat);
+          var b = blockAt(blocks, 10)[0];
+          b.state.should.equal(d > 0 ? 'up' : 'down');
+          b.rows.length.should.equal(1);
+          return b.rows[0];
+        }
+
+        it('should keep 0.11 unchanged for up 10 % (0.10 is lower, 0.15 is +36 %)', function () {
+          var r = rowFor(0.11, 0.1);
+          r.newRate.should.equal(0.11);
+          r.unchanged.should.equal(true);
+        });
+
+        it('should keep 0.2 unchanged for up 10 % (0.25 is +25 %)', function () {
+          var r = rowFor(0.2, 0.1);
+          r.newRate.should.equal(0.2);
+          r.unchanged.should.equal(true);
+        });
+
+        it('should raise 0.5 to 0.55 for up 10 % without unchanged key', function () {
+          var r = rowFor(0.5, 0.1);
+          r.newRate.should.equal(0.55);
+          r.should.not.have.property('unchanged');
+        });
+
+        it('should step 0.11 down to 0.10 for down 10 %', function () {
+          var r = rowFor(0.11, -0.1);
+          r.newRate.should.equal(0.1);
+          r.should.not.have.property('unchanged');
+        });
+
+        it('should keep 0.2 unchanged for down 10 % (0.15 is -25 %)', function () {
+          var r = rowFor(0.2, -0.1);
+          r.newRate.should.equal(0.2);
+          r.unchanged.should.equal(true);
+        });
+
+        it('should keep 0.02 unchanged for down 20 % (never round up or reach 0)', function () {
+          var r = rowFor(0.02, -0.2);
+          r.newRate.should.equal(0.02);
+          r.unchanged.should.equal(true);
+        });
+      });
+
+      it('should count duplicate readings only once for coverage', function () {
+        var byDay = readings(function bg (di, h, m) {
+          return (di === 0 && h === 8 && (m === 5 || m === 10 || m === 15)) ? null : 130;
+        });
+        var key = dayKey(0);
+        var hour8 = byDay[key].filter(function inHour (r) { return r.mills >= at(0, 8, 0) && r.mills < at(0, 9, 0); });
+        byDay[key] = byDay[key].concat(hour8.slice(0, 3).map(function copy (r) { return { mills: r.mills, sgv: r.sgv }; }));
+        (find(run({ readingsByDay: byDay }), 0, 8) === undefined).should.equal(true);
       });
     });
   });
