@@ -59,6 +59,14 @@ describe('pump_analysis recommendations', function () {
         classify([bolus(6, 30, 1.2, { carbs: 6 })])[0].cls.should.equal('dawn');
       });
 
+      it('should classify exactly 1.5 U with exactly 10 g at 06:30 as dawn', function () {
+        classify([bolus(6, 30, 1.5, { carbs: 10 })])[0].cls.should.equal('dawn');
+      });
+
+      it('should not classify 11 g at 06:30 as dawn', function () {
+        classify([bolus(6, 30, 1.2, { carbs: 11 })])[0].cls.should.equal('meal');
+      });
+
       it('should classify 1.6 U without carbs at 06:30 and BG 150 as unclear', function () {
         classify([bolus(6, 30, 1.6)], [reading(6, 28, 150)])[0].cls.should.equal('unclear');
       });
@@ -90,10 +98,23 @@ describe('pump_analysis recommendations', function () {
       });
 
       it('should report consumedBy in carbEntries', function () {
-        var t = [bolus(12, 0, 4), carbEntry(12, 20, 48), carbEntry(18, 0, 30)];
-        classify(t);
+        var t = [carbEntry(18, 0, 30), carbEntry(12, 20, 48), bolus(12, 0, 4)];
         var entries = bc.carbEntries(t);
+        var boluses = classify(t);
         entries.length.should.equal(2);
+        entries[0].mills.should.be.below(entries[1].mills);
+        entries[0].mills.should.equal(new Date(utcFor(12, 20)).getTime());
+        entries[0].consumedBy.should.equal(boluses[0].mills);
+        (entries[1].consumedBy === null).should.equal(true);
+      });
+
+      it('should set consumedBy to its own mills for a carb-carrying bolus', function () {
+        var b = bolus(12, 0, 4, { eventType: 'Meal Bolus', carbs: 40 });
+        var entries = bc.carbEntries([b]);
+        entries.length.should.equal(1);
+        entries[0].carbs.should.equal(40);
+        entries[0].consumedBy.should.equal(new Date(utcFor(12, 0)).getTime());
+        entries[0].consumedBy.should.equal(entries[0].mills);
       });
     });
 
@@ -102,6 +123,20 @@ describe('pump_analysis recommendations', function () {
         var r = classify([bolus(14, 0, 2)], [reading(13, 58, 250)])[0];
         r.cls.should.equal('correction');
         r.bgAtBolus.should.equal(250);
+      });
+
+      it('should not classify BG exactly 240 as correction', function () {
+        classify([bolus(14, 0, 2)], [reading(13, 58, 240)])[0].cls.should.equal('unclear');
+      });
+
+      it('should classify BG 241 as correction', function () {
+        classify([bolus(14, 0, 2)], [reading(13, 58, 241)])[0].cls.should.equal('correction');
+      });
+
+      it('should flag exactly +8 per 5 min as fastRise', function () {
+        var r = classify([bolus(14, 0, 2)], [reading(13, 50, 170), reading(13, 55, 178)])[0];
+        r.fastRise.should.equal(true);
+        r.cls.should.equal('correction');
       });
 
       it('should classify fast rise 170 to 180 as correction', function () {
