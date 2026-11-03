@@ -392,6 +392,7 @@ describe('pump_analysis recommendations', function () {
         var cases = run({ readingsByDay: byDay });
         var c = find(cases, 0, 10);
         c.d.should.be.approximately(1 / 0.8, 1e-6);
+        c.drift.should.be.approximately(30, 1e-6);
         find(cases, 0, 11).d.should.be.approximately(-1 / 0.8, 1e-6);
       });
 
@@ -1157,6 +1158,7 @@ describe('pump_analysis recommendations', function () {
     };
     var RAISE_WARNING = 'Pump often raises basal here, but hypo on %1/%2 days, clarify the cause first';
     var DAWN = 'Dawn bolus on %1/%2 days taken into account as a range, avg %3 U';
+    var DRIFT = 'BG in fasting windows changes by %1 per hour (median)';
 
     function dayKey (dayIdx) {
       var d = new Date(Date.UTC(2026, 9, 1 + dayIdx));
@@ -1319,6 +1321,35 @@ describe('pump_analysis recommendations', function () {
         card.reasons.forEach(function noPump (r) { r.key.should.not.match(/Control-IQ/); });
       });
 
+      it('should lead an up card with the median BG drift when the pump did not move basal', function () {
+        var bg = function drift (di, h, m) {
+          var t = h * 60 + m;
+          if (t >= 120 && t < 360) return 130 + (t - 120) * 9 / 60;
+          if (t >= 360 && t < 600) return 166 - (t - 360) * 9 / 60;
+          return 130;
+        };
+        var res = engine.buildRecommendations(input({ treatments: basalTreatments(0.6), readingsByDay: readings(bg) }));
+        var card = cardAt(res, '01:00-06:00');
+        card.reasons[0].should.eql({ key: DRIFT, args: ['+9 mg/dl'] });
+        var down = basalCards(res).filter(function isDown (c) { return c.state === 'down'; })[0];
+        reasonOf(down, DRIFT).args.should.eql(['-9 mg/dl']);
+      });
+
+      it('should put the drift reason after the pump reason and omit it when the drift rounds to 0', function () {
+        var bg = function drift (di, h, m) {
+          var t = h * 60 + m;
+          if (t >= 120 && t < 360) return 130 + (t - 120) * 3 / 60;
+          if (t >= 360 && t < 600) return 142 - (t - 360) * 3 / 60;
+          return 130;
+        };
+        var card = cardAt(engine.buildRecommendations(input({ readingsByDay: readings(bg) })), '01:00-06:00');
+        card.state.should.equal('up');
+        card.reasons[0].key.should.match(/Control-IQ raised/);
+        card.reasons[1].should.eql({ key: DRIFT, args: ['+3 mg/dl'] });
+        var flat = cardAt(engine.buildRecommendations(input()), '01:00-06:00');
+        (reasonOf(flat, DRIFT) === undefined).should.equal(true);
+      });
+
       it('should keep the 1 h earlier hint when the reasons exceed the cap', function () {
         // Fast-rise corrections at 01:30 on two days add a correction reason:
         // pump, no hypo, dawn, correction and extension would be 5 reasons.
@@ -1435,10 +1466,17 @@ describe('pump_analysis recommendations', function () {
         });
         var t = basalTreatments(0.9);
         for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        var drift = function drift (di, h, m) {
+          var tm = h * 60 + m;
+          if (tm >= 120 && tm < 360) return 130 + (tm - 120) * 9 / 60;
+          if (tm >= 360 && tm < 600) return 166 - (tm - 360) * 9 / 60;
+          return 130;
+        };
         var results = [
           engine.buildRecommendations(input({ treatments: t, dayStats: hypoOnDays(4, 3) }))
           , engine.buildRecommendations(input({ treatments: t, dayStats: hypoOnDays(1, 3) }))
           , engine.buildRecommendations(input({ treatments: [], pumpDayKeys: [] }))
+          , engine.buildRecommendations(input({ readingsByDay: readings(drift) }))
         ];
         var used = [engine.PROFILE_SWITCH_KEY];
         results.forEach(function eachResult (res) {
