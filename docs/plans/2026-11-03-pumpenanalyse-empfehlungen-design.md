@@ -78,18 +78,19 @@ Neues Modul `lib/report_plugins/pump_analysis/recommendations.js`: rein funktion
 - **Fastenfenster:** eine Stunde an einem Tag, in deren 4 Stunden davor weder Mahlzeiten-Bolus, Korrektur, unklarer Bolus noch KH-Eintrag (außer ignorierte Dawn-Boli) lag, und mit ≥ 80 % CGM-Abdeckung. Ignorierte Dawn-Boli stören ein Fastenfenster nicht.
 - **Fall** = ein Fastenfenster (Stunde × Tag). Basal-Empfehlungen stützen sich **nur** auf Fastenfenster.
 - **Abweichung pro Fall** d = (geliefertes Basal netto + Auto-Boli + BZ-Drift/`sens`) / Profil-Basal - 1. Geliefertes Basal netto = Erhöhungen minus Rücknahmen/Unterbrechungen. Pro Tag über `integrateActualBasalByHour(treatments, profile, [dayKey])` (`lib/statistics.js`, so wie `detectHotspots` es tut), weil die bestehende Funktion sonst nur Mittelwerte über alle Tage liefert.
+- **Auto-Boli und Dawn-Insulin** werden über 4 h ab Abgabe anteilig auf die Stunden verteilt (Wirkdauer), nicht nur der Abgabestunde zugerechnet. Auto-Boli zählen voll in d. Für Dawn-Insulin wird d zweimal gerechnet, ohne und mit dem anteiligen Dawn-Insulin; verwendet wird der Wert, der näher an 0 liegt (Ruling R22: der BZ-Abfall nach dem Dawn-Bolus darf nicht als "zu viel Basal" gelten, ein Weglassen der Fälle würde umgekehrt zu mehr Basal verzerren).
 - **Richtung pro Fall:** hoch, wenn d ≥ +10 %, runter, wenn d ≤ -10 %, sonst neutral. Neutral zählt **gegen** "gleiche Richtung".
 - **Vorschlag pro Stunde:** Median der d. "Passt", wenn |Median| < 10 %.
 - **Blöcke:** benachbarte Stunden mit gleicher Richtung werden zusammengefasst. Fallzahl eines Blocks = Minimum der Fallzahlen seiner Stunden; Richtungsanteil = Anteil über alle Fälle des Blocks.
 - **Vorverlegung:** Der Block wird um 1 Stunde nach vorne verlängert (02:00-06:00 → 01:00-06:00), außer diese Stunde hat die Gegenrichtung oder "zu wenig Daten". Über Mitternacht erlaubt (Block ab 00:00 beginnt dann 23:00).
 - **Neue Rate:** pro Profilsegment im Block: Profilrate × (1 + Median-d des Blocks), begrenzt auf ±20 %, auf 0,05 U/h gerundet. Mehrere Profilraten im Block → mehrere Zeilen in derselben Karte.
 - Ohne Pumpen-Basaldaten (`basal_source !== 'pump'`, `lib/statistics.js:1590`): Basal-Empfehlungen entfallen mit Hinweis.
-- Fester Grund in jeder Basal-Karte im Morgenfenster, wenn Dawn-Boli vorkamen: "Dawn-Bolus an %1/%2 Tagen nicht eingerechnet, Ø %3 U" (ignorieren unterschätzt den Morgenbedarf leicht; der Nutzer soll das sehen).
+- Fester Grund in jeder Basal-Karte im Morgenfenster, wenn Dawn-Boli vorkamen: "Dawn-Bolus an %1/%2 Tagen als Spanne berücksichtigt, Ø %3 U" (der Grund wird wie der Vorverlegungs-Hinweis nie gekürzt).
 
 ### 5.2 KH-Faktor pro Mahlzeiten-Slot
 
 - **Fall** = Mahlzeiten-Bolus mit KH-Eintrag, ohne weitere Mahlzeit in den 4 h danach, mit ≥ 80 % CGM-Abdeckung.
-- **Effektiver Faktor** = KH / (Mahlzeiten-Bolus + Korrekturen + Auto-Boli + Netto-Basalabweichung in den 4 h danach + Restkorrektur). Restkorrektur = (BZ nach 4 h - Startwert) / `sens`; positiv, wenn der BZ höher endet. Ist der Nenner ≤ 0, wird der Fall verworfen.
+- **Effektiver Faktor** = KH / (Mahlzeiten-Bolus + Korrekturen + Auto-Boli + Netto-Basalabweichung in den 4 h danach + Restkorrektur). Restkorrektur = (BZ nach 4 h - Startwert) / `sens`; positiv, wenn der BZ höher endet. Dawn-Insulin, das ins Fenster wirkt, zählt anteilig mit. Ist der Nenner ≤ 0, zählt der Fall mit d = -1 (Richtung "weniger Insulin"), ohne effektiven Faktor in den angezeigten Medianen; ein Verwerfen würde den Median zu mehr Insulin verzerren.
 - KH-Faktor und `sens` aus dem Profil zur jeweiligen Uhrzeit: neue generische Zeitplan-Suche analog `buildProfileBasalLookup` (`lib/statistics.js:714-732`), die es für `carbratio`/`sens` noch nicht gibt.
 - **Abweichung pro Fall** d = Profil-Faktor / effektiver Faktor - 1 (positiv = mehr Insulin nötig). Richtung, Median, "Passt", 20 %-Grenze wie 5.1. Rundung 0,5 g/U.
 - **Muster "zu spät gespritzt":** Spitze ≥ Startwert + 80 mg/dl innerhalb von 90 min **und** Wert nach 4 h < Startwert an ≥ 60 % der Fälle → Karte "Spritz-Ess-Abstand prüfen" statt Faktor-Änderung.
@@ -97,7 +98,7 @@ Neues Modul `lib/report_plugins/pump_analysis/recommendations.js`: rein funktion
 ### 5.3 Korrekturfaktor
 
 - **Fall** = Korrektur bei BZ > 240, nicht schnell steigend, ohne KH, Bolus oder Hypo-Behandlung 3 h davor und danach, ≥ 80 % CGM-Abdeckung.
-- Gemessener Abfall nach 3 h in mg/dl pro U (Auto-Boli und Basalabweichung im Fenster einrechnen), verglichen mit `sens` zur Uhrzeit. d = `sens` / gemessen - 1 (positiv = stärkerer Faktor nötig). Rest wie 5.1. Rundung 1 mg/dl/U.
+- Gemessener Abfall nach 3 h in mg/dl pro U (Auto-Boli und Basalabweichung im Fenster einrechnen), verglichen mit `sens` zur Uhrzeit. d = `sens` / gemessen - 1 (positiv = stärkerer Faktor nötig). Rest wie 5.1. Rundung 1 mg/dl/U. Dawn-Insulin im Fenster zählt anteilig mit. Korrekturen ohne BZ-Abfall entfallen; Korrekturen mit BZ-Abfall, aber Insulin ≤ 0 im Fenster, zählen mit d = -1.
 - Korrekturen wegen schnellen Anstiegs zählen nur zur Korrekturmenge pro Tageszeit (Grund-Stichwort), nicht zur Messung.
 
 ### 5.4 Vertrauensstufe (Nutzer bestätigt)
@@ -110,7 +111,7 @@ Neues Modul `lib/report_plugins/pump_analysis/recommendations.js`: rein funktion
 ### 5.5 Gegensignale (zentrale Sicherheitsregel, Nutzer bestätigt)
 
 - Bei "mehr Insulin": Hypo im Zeitraum. Bei "weniger Insulin": Hyper > 250 im Zeitraum.
-- Zeitraum: Basal = Block inkl. vorverlegter Stunde; KH-Faktor = 4 h nach der Mahlzeit; Korrekturfaktor = 3 h nach der Korrektur.
+- Zeitraum: Basal = Block inkl. vorverlegter Stunde; KH-Faktor = 4 h nach jeder Mahlzeit des Slots; Korrekturfaktor = 3 h nach jeder Korrektur. Geprüft werden alle Mahlzeiten bzw. Korrekturen, auch die für die Messung verworfenen (Ruling R21: gerade Mahlzeiten mit behandelter Hypo fallen sonst heraus).
 - Quelle: `dayStats[i].hypo_episodes` / `hyper_episodes` (mit Start/Ende), nicht `computeEpisodesWithHours` (liefert nur Tageszahlen pro Stunde).
 - **Schwach:** an 1-2 Tagen. Stufe eins niedriger (hoch → mittel → niedrig; niedrig bleibt niedrig). Gegensignal steht als Grund dabei.
 - **Stark:** an ≥ 3 Tagen. Keine Empfehlung, stattdessen Warnkarte, z. B. "Pumpe erhöht hier oft, aber Hypos an 4/14 Tagen, erst Ursache klären".
@@ -122,7 +123,7 @@ Neues Modul `lib/report_plugins/pump_analysis/recommendations.js`: rein funktion
 - "an %1/%2 Tagen Korrektur in diesem Zeitraum, im Schnitt %3 U"
 - "nach %1/%2 Mahlzeiten BZ nach 2 h über %3 (Median-Spitze %4)"
 - "keine Hypo in diesem Zeitraum" bzw. "Hypo an %1/%2 Tagen"
-- "Dawn-Bolus an %1/%2 Tagen nicht eingerechnet, Ø %3 U"
+- "Dawn-Bolus an %1/%2 Tagen als Spanne berücksichtigt, Ø %3 U"
 
 Darunter immer die Datenbasis, z. B. "14 Nächte, davon 11 saubere Fastenfenster; 6 Mahlzeiten ohne KH-Eintrag, 3 unklare Boli nicht ausgewertet".
 
