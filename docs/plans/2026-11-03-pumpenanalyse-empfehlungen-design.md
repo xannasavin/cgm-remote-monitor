@@ -49,7 +49,7 @@ Alle Grenzwerte als benannte Konstanten in einem Modul (z. B. `pump_analysis/rec
 | "Schnell steigend" | ≥ +8 mg/dl pro 5 min (Anstieg zwischen zwei aufeinanderfolgenden CGM-Werten vor dem Bolus) | Nutzer |
 | KH-Eintrag gehört zum Bolus | ±30 min | meine Entscheidung |
 | Mahlzeiten-Slots | Frühstück 05-10, Mittag 10-15, Abend 17-22 Uhr | meine Entscheidung |
-| Hypo | < 70 mg/dl für ≥ 15 min | an bestehende Episodenerkennung in `lib/statistics.js` angleichen; weicht sie ab, gilt die bestehende Definition |
+| Hypo-Gegensignal | < 70 mg/dl für ≥ 15 min | Nutzer (2026-11-04): feste Grenze, unabhängig vom unteren Zielwert im Berichtsformular; Episodenerkennung aus `lib/statistics.js` (≥ 3 Werte) |
 | Hyper-Gegensignal | > 250 mg/dl für ≥ 15 min | meine Entscheidung (über 190 ist fast täglich, würde jede "weniger"-Empfehlung blockieren) |
 | Richtungs-Schwelle / "Passt" | 10 % | Nutzer bestätigt |
 | Max. Schritt | 20 % | Nutzer bestätigt |
@@ -107,12 +107,13 @@ Neues Modul `lib/report_plugins/pump_analysis/recommendations.js`: rein funktion
 - **mittel:** ≥ 5 Fälle und ≥ 60 % gleiche Richtung
 - **niedrig:** sonst (bei ≥ 5 Fällen)
 - **zu wenig Daten:** < 5 Fälle. Kein Rückgriff auf alle Tage.
+- **Begründung in der Karte** (Nutzer, 2026-11-04): bei hoch/mittel/niedrig steht im Kartenkörper der Richtungsanteil gegen die Schwellen, z. B. "Vertrauen: 55 % der Fälle zeigen in diese Richtung (mittel ab 60 %, hoch ab 75 % bei mindestens 7 Fällen)", bei schwachem Gegensignal ergänzt um ", Gegensignal an %5 Tagen senkt um eine Stufe". Warnkarten und "zu wenig Daten" haben keine Begründungszeile.
 
 ### 5.5 Gegensignale (zentrale Sicherheitsregel, Nutzer bestätigt)
 
 - Bei "mehr Insulin": Hypo im Zeitraum. Bei "weniger Insulin": Hyper > 250 im Zeitraum.
 - Zeitraum: Basal = Block inkl. vorverlegter Stunde; KH-Faktor = 4 h nach jeder Mahlzeit des Slots; Korrekturfaktor = 3 h nach jeder Korrektur. Geprüft werden alle Mahlzeiten bzw. Korrekturen, auch die für die Messung verworfenen (Ruling R21: gerade Mahlzeiten mit behandelter Hypo fallen sonst heraus).
-- Quelle: `dayStats[i].hypo_episodes` / `hyper_episodes` (mit Start/Ende), nicht `computeEpisodesWithHours` (liefert nur Tageszahlen pro Stunde).
+- Quelle: Episoden mit Start/Ende, aus den mg/dl-Werten neu berechnet (Hypo: `computeDayStats` mit Grenze 70; Hyper: eigene Laufsuche > 250). Nicht `dayStats[i].hypo_episodes`, denn die nutzen den unteren Zielwert des Berichts, und nicht `computeEpisodesWithHours` (liefert nur Tageszahlen pro Stunde).
 - **Schwach:** an 1-2 Tagen. Stufe eins niedriger (hoch → mittel → niedrig; niedrig bleibt niedrig). Gegensignal steht als Grund dabei.
 - **Stark:** an ≥ 3 Tagen. Keine Empfehlung, stattdessen Warnkarte, z. B. "Pumpe erhöht hier oft, aber Hypos an 4/14 Tagen, erst Ursache klären".
 
@@ -132,6 +133,8 @@ Darunter immer die Datenbasis, z. B. "14 Nächte, davon 11 saubere Fastenfenster
 Reihenfolge auf der Seite:
 1. Bestehender Hinweis zur KI und Einleitung (unverändert).
 2. **Empfehlungen** (neu): Karten wie im Mockup, inkl. "passt, keine Änderung", "zu wenig Daten" und Warnkarten. Fester Hinweis: Rechenhilfe, keine Therapieanweisung; nur einen Parameter auf einmal ändern.
+   - Jede Karte ist zugeklappt (`<details>`); die Titelzeile (Zeit, Titel, Änderung, Stufe) ist die Kopfzeile, Gründe, Begründung der Stufe und Datenbasis stehen im aufgeklappten Teil (Nutzer, 2026-11-04).
+   - Filter: Standard "ab mittel". Karten mit "Vertrauen niedrig" und "zu wenig Daten" sind ausgeblendet; ein Kästchen "Auch Karten mit niedrigem Vertrauen oder zu wenig Daten zeigen (N)" blendet sie ein. Warnkarten sind immer sichtbar. Ist keine Karte mindestens mittel, steht "Keine Empfehlung mit mindestens mittlerem Vertrauen." da. Umsetzung ohne Skript (Kästchen + CSS), weil der Bereich per `innerHTML` gesetzt wird.
 3. **Perioden-Statistik** mit Spalten Wert, Ziel, Erklärung, plus GMI (3,31 + 0,02392 × Mittelwert mg/dl; Vorbild mit Einheiten-Umrechnung in `glucosedistribution.js:443-445`). Zielwerte: TIR > 70 %, unter Ziel < 4 %, über Ziel < 25 %, CV ≤ 36 %, GMI < 7 %. Wert grün/gelb je nach Ziel; MAGE und SD als grobe Richtwerte **ohne** Färbung. `renderPeriodSummary` bekommt ein Flag (z. B. `opts.explained`); der KI-Tab (`ai_eval.js:337`) ruft weiter die kurze Form auf. Da `renderUtils.table()` jede Zelle escaped und keine Klassen kennt (`render_utils.js:55-63`), braucht es eine Tabellenvariante mit Zellklassen.
 4. **Pumpenaktions-Hotspots:** zusätzlich mittlere Abweichung in U/h pro Stunde = `basal_actual.hourly[h] - basal_scheduled.hourly[h]` (Mittel über Pumpentage). Die Daten werden in `pump_analysis.js` an den Chart übergeben.
 5. **Basal-Abweichung:** Liniendiagramm bleibt. Fläche rot, wenn geliefert > Profil, blau, wenn geliefert < Profil (zwei `d3.area` mit `.defined()` oder Clip-Pfaden). Das Blau muss sich von der Linienfarbe `#17a2b8` unterscheiden.
@@ -140,7 +143,7 @@ Reihenfolge auf der Seite:
 8. **Episodenzeiten:** unverändert.
 9. Bestehende aufklappbare Bereiche (Datenwarnungen, Behandlungsübersicht) unverändert an ihrer Stelle.
 10. **Tageszeitliche Muster:** Das bisherige Band (Mittelwert ± Standardabweichung, `charts.js:73-76`) wird durch zwei Perzentil-Bänder (25-75 und 10-90) ersetzt, berechnet aus den Einzelwerten pro Stunde (`entriesByDay`, `localHour`) mit `d3.quantile`.
-11. **Tägliche Aufschlüsselung:** 5 Bereiche (< 54, 54 bis untere Grenze, Ziel, obere Grenze bis 250, > 250), berechnet in pump_analysis aus `entriesByDay`.
+11. **Tägliche Aufschlüsselung:** 5 Bereiche (< sehr niedrig, sehr niedrig bis untere Grenze, Ziel, obere Grenze bis sehr hoch, > sehr hoch), berechnet in pump_analysis aus `entriesByDay`. "Sehr niedrig" und "sehr hoch" sind die Nightscout-Schwellen `BG_LOW` / `BG_HIGH` (`settings.thresholds`, mg/dl); fehlen sie, gelten 54 / 250 (TIR-Konsens). Sie werden auf den Zielbereich des Berichts begrenzt. Die Legende zeigt die Werte jedes Bereichs, z. B. "Tief (55–79)" (Nutzer, 2026-11-04).
 
 ## 7. Bekannter Fehler: Legende "U/Tag"
 

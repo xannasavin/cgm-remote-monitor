@@ -1410,12 +1410,14 @@ describe('pump_analysis recommendations', function () {
     function reasonOf (card, key) {
       return card.reasons.filter(function match (r) { return r.key === key; })[0];
     }
-    function hypoOnDays (n, hour) {
-      var stats = [];
-      for (var di = 0; di < DAYS; di++) {
-        stats.push({ hypo_episodes: di < n ? [{ start: at(di, hour, 0), end: at(di, hour, 20), duration_min: 20, nadir: 60 }] : [] });
-      }
-      return stats;
+    // Readings with a 20 min hypo (60 mg/dl at :20-:35) at `hour` on the first
+    // n days; other values come from base (or the flat default). Mid-hour, so
+    // the fasting-window drift of that hour stays unchanged.
+    function hypoOnDays (n, hour, base, value) {
+      return readings(function withHypo (di, h, m) {
+        if (di >= 0 && di < n && h === hour && m >= 20 && m <= 35) return value === undefined ? 60 : value;
+        return base ? base(di, h, m) : undefined;
+      });
     }
 
     describe('rateConfidence', function () {
@@ -1480,7 +1482,7 @@ describe('pump_analysis recommendations', function () {
 
     describe('buildRecommendations', function () {
       it('should warn on basal up 01-06 with hypo on 4/14 days at 03:00', function () {
-        var res = engine.buildRecommendations(input({ dayStats: hypoOnDays(4, 3) }));
+        var res = engine.buildRecommendations(input({ readingsByDay: hypoOnDays(4, 3) }));
         var card = cardAt(res, '01:00-06:00');
         card.kind.should.equal('basal');
         card.state.should.equal('warning');
@@ -1504,6 +1506,36 @@ describe('pump_analysis recommendations', function () {
         card.basisLine.key.should.equal('Data: %1 pump days, %2 clean fasting windows; %3 unclear boluses not evaluated');
         // %2 = distinct days with a clean fasting window in the block's own hours
         card.basisLine.args.should.eql(['14', '14', '0']);
+      });
+
+      it('should count a hypo only below 70, not below the lower target of the report', function () {
+        var report = function (over) { return Object.assign(input(over), { targetLow: 80 }); };
+        var at75 = cardAt(engine.buildRecommendations(report({ readingsByDay: hypoOnDays(4, 3, null, 75) })), '01:00-06:00');
+        at75.state.should.equal('up');
+        at75.confidence.should.equal('high');
+        reasonOf(at75, 'No hypo in this period').should.be.ok();
+        var at65 = cardAt(engine.buildRecommendations(report({ readingsByDay: hypoOnDays(4, 3, null, 65) })), '01:00-06:00');
+        at65.state.should.equal('warning');
+      });
+
+      it('should explain the confidence level with the share and the thresholds', function () {
+        var card = cardAt(engine.buildRecommendations(input()), '01:00-06:00');
+        card.confidenceNote.key.should.equal('Confidence: %1 % of the cases point in this direction (medium from %2 %, high from %3 % with at least %4 cases)');
+        card.confidenceNote.args.should.eql(['100', '60', '75', '7']);
+      });
+
+      it('should name the downgrade by a weak counter-signal in the confidence note', function () {
+        var card = cardAt(engine.buildRecommendations(input({ readingsByDay: hypoOnDays(1, 3) })), '01:00-06:00');
+        card.confidence.should.equal('medium');
+        card.confidenceNote.key.should.match(/counter-signal on %5 days lowers it by one level$/);
+        card.confidenceNote.args[4].should.equal('1');
+      });
+
+      it('should give no confidence note for warning and insufficient cards', function () {
+        var res = engine.buildRecommendations(input({ readingsByDay: hypoOnDays(4, 3) }));
+        res.cards.forEach(function eachCard (c) {
+          if (c.state === 'warning' || c.state === 'insufficient') (c.confidenceNote === null || c.confidenceNote === undefined).should.equal(true);
+        });
       });
 
       it('should omit the pump reason when the pump did not move basal', function () {
@@ -1597,7 +1629,7 @@ describe('pump_analysis recommendations', function () {
           if (tm >= 360 && tm < 600) return 142 - (tm - 360) * 3 / 60;
           return 130;
         };
-        var card = cardAt(engine.buildRecommendations(input({ treatments: t, readingsByDay: readings(bg), dayStats: hypoOnDays(1, 3) })), '01:00-06:00');
+        var card = cardAt(engine.buildRecommendations(input({ treatments: t, readingsByDay: hypoOnDays(1, 3, bg) })), '01:00-06:00');
         card.state.should.equal('up');
         card.reasons.length.should.equal(4);
         reasonOf(card, 'Hypo on %1/%2 days').args.should.eql(['1', '14']);
@@ -1662,8 +1694,20 @@ describe('pump_analysis recommendations', function () {
         });
       });
 
+      it('should count dawn and unclear boluses only on report days', function () {
+        var t = basalTreatments(0.9);
+        for (var di = 0; di < 9; di++) t.push(bolusAt(di, 6, 30, 1.2));
+        t.push(bolusAt(-1, 6, 30, 1.2));
+        t.push(bolusAt(DAYS, 6, 30, 1.2));
+        t.push(bolusAt(-1, 13, 0, 3));
+        var res = engine.buildRecommendations(input({ treatments: t }));
+        reasonOf(cardAt(res, '01:00-06:00'), DAWN).args.should.eql(['9', '14', '1.2']);
+        res.basis.dawnBoluses.should.equal(9);
+        res.basis.unclearBoluses.should.equal(0);
+      });
+
       it('should sort warnings and suggestions first, then ok, then insufficient', function () {
-        var res = engine.buildRecommendations(input({ dayStats: hypoOnDays(4, 3) }));
+        var res = engine.buildRecommendations(input({ readingsByDay: hypoOnDays(4, 3) }));
         var groups = res.cards.map(function group (c) {
           if (c.state === 'ok') return 1;
           if (c.state === 'insufficient') return 2;
@@ -1676,7 +1720,7 @@ describe('pump_analysis recommendations', function () {
       });
 
       it('should give 1 to 4 reasons with string args and a basis line on every card', function () {
-        var res = engine.buildRecommendations(input({ dayStats: hypoOnDays(1, 3) }));
+        var res = engine.buildRecommendations(input({ readingsByDay: hypoOnDays(1, 3) }));
         res.cards.length.should.be.above(4);
         res.cards.forEach(function eachCard (c) {
           c.reasons.length.should.be.within(1, 4);
@@ -1738,15 +1782,15 @@ describe('pump_analysis recommendations', function () {
           return 130;
         };
         var results = [
-          engine.buildRecommendations(input({ treatments: t, dayStats: hypoOnDays(4, 3) }))
-          , engine.buildRecommendations(input({ treatments: t, dayStats: hypoOnDays(1, 3) }))
+          engine.buildRecommendations(input({ treatments: t, readingsByDay: hypoOnDays(4, 3) }))
+          , engine.buildRecommendations(input({ treatments: t, readingsByDay: hypoOnDays(1, 3) }))
           , engine.buildRecommendations(input({ treatments: [], pumpDayKeys: [] }))
           , engine.buildRecommendations(input({ readingsByDay: readings(drift) }))
         ];
         var used = [engine.PROFILE_SWITCH_KEY];
         results.forEach(function eachResult (res) {
           res.cards.forEach(function eachCard (c) {
-            c.reasons.concat([c.basisLine]).forEach(function eachReason (r) { used.push(r.key); });
+            c.reasons.concat([c.basisLine], c.confidenceNote ? [c.confidenceNote] : []).forEach(function eachReason (r) { used.push(r.key); });
           });
         });
         used.forEach(function present (k) {
@@ -1771,12 +1815,10 @@ describe('pump_analysis recommendations', function () {
       // and a 15 g hypo treatment at 14:15 drops the meal as "other meal".
       function lunchInput (hypoDays) {
         var t = [];
-        var stats = [];
         for (var di = 0; di < DAYS; di++) {
           var hypo = hypoDays.indexOf(di) !== -1;
           if (di < 8) t.push(bolusAt(di, 12, 0, 5, { eventType: 'Meal Bolus', carbs: 50 }));
           if (hypo) t.push(carbsAt(di, 14, 15, 15));
-          stats.push({ hypo_episodes: hypo ? [{ start: at(di, 14, 0), end: at(di, 14, 30) }] : [] });
         }
         var bg = function lunch (di, h, m) {
           var t2 = h * 60 + m;
@@ -1789,7 +1831,7 @@ describe('pump_analysis recommendations', function () {
           if (t2 <= 780) return 130 + (t2 - 720);
           return 190 - (t2 - 780) * 30 / 180;
         };
-        return input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg), dayStats: stats });
+        return input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg) });
       }
 
       // 10 corrections of 2 U at 14:00 with BG 250 (ISF 30, no pump). On normal
@@ -1797,12 +1839,10 @@ describe('pump_analysis recommendations', function () {
       // hypoDays BG falls to 60 and a hypo treatment at 15:40 disturbs the case.
       function correctionInput (hypoDays) {
         var t = [];
-        var stats = [];
         for (var di = 0; di < DAYS; di++) {
           var hypo = hypoDays.indexOf(di) !== -1;
           if (di < 10) t.push(bolusAt(di, 14, 0, 2));
           if (hypo) t.push(carbsAt(di, 15, 40, 15));
-          stats.push({ hypo_episodes: hypo ? [{ start: at(di, 15, 30), end: at(di, 15, 50) }] : [] });
         }
         var bg = function corr (di, h, m) {
           var t2 = h * 60 + m;
@@ -1815,7 +1855,7 @@ describe('pump_analysis recommendations', function () {
           }
           return 250 - (t2 - 840) * 40 / 180;
         };
-        return input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg), dayStats: stats });
+        return input({ treatments: t, pumpDayKeys: [], readingsByDay: readings(bg) });
       }
 
       it('should warn instead of suggesting a stronger carb ratio when 3 of 8 lunches end in a hypo', function () {
