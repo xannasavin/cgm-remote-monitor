@@ -100,6 +100,34 @@ describe('statistics', function () {
   // ========== computeDayStats basic ==========
   describe('computeDayStats', function () {
 
+    describe('mmol input', function () {
+      it('keeps mmol readings and matches the mg/dl run for hypo and TIR', function () {
+        var mgdl = [100, 120, 60, 58, 55, 57, 62, 90, 200, 210, 220, 150];
+        var mmol = mgdl.map(function (v) { return v / 18.01559; });
+        var mgRes = statistics.computeDayStats(makeSgvRecords(mgdl), [], DEFAULT_OPTIONS);
+        var mmRes = statistics.computeDayStats(makeSgvRecords(mmol), [], {
+          targetLow: 70 / 18.01559
+          , targetHigh: 180 / 18.01559
+          , units: 'mmol'
+        });
+        mmRes.total_readings.should.equal(mgdl.length);
+        mmRes.hypo_episodes.length.should.be.above(0);
+        mmRes.hypo_episodes.length.should.equal(mgRes.hypo_episodes.length);
+        mmRes.hyper_episodes.length.should.equal(mgRes.hyper_episodes.length);
+        mmRes.tir_pct.should.equal(mgRes.tir_pct);
+        mmRes.tbr_pct.should.equal(mgRes.tbr_pct);
+        mmRes.tir_pct.should.be.above(0);
+      });
+
+      it('drops out-of-range mmol readings with the converted sensor bounds', function () {
+        var mmol = [2.0, 5.5, 6.0, 34.0];
+        var res = statistics.computeDayStats(makeSgvRecords(mmol), [], {
+          targetLow: 3.9, targetHigh: 10, units: 'mmol/L'
+        });
+        res.total_readings.should.equal(2);
+      });
+    });
+
     describe('basic statistics (average, median, SD, CV)', function () {
 
       it('should compute average correctly', function () {
@@ -794,6 +822,23 @@ describe('pump action pipeline', function () {
       statistics.AUTO_BOLUS_KEYWORDS.length.should.be.greaterThan(4);
       statistics.AUTO_BOLUS_KEYWORDS.indexOf('automatic').should.not.equal(-1);
       statistics.AUTO_BOLUS_KEYWORDS.indexOf('automatisch').should.not.equal(-1);
+    });
+  });
+
+  describe('buildProfileScheduleLookup', function () {
+    it('should step through a carbratio schedule', function () {
+      var lookup = statistics.buildProfileScheduleLookup({
+        carbratio: [{ time: '00:00', value: 10 }, { time: '11:00', value: 8 }]
+      }, 'carbratio');
+      lookup(12, 0).should.equal(8);
+      lookup(6, 0).should.equal(10);
+      lookup(11, 0).should.equal(8);
+    });
+
+    it('should return null for a missing schedule', function () {
+      var lookup = statistics.buildProfileScheduleLookup({ basal: [{ time: '00:00', value: 1 }] }, 'carbratio');
+      (lookup(12, 0) === null).should.equal(true);
+      (statistics.buildProfileScheduleLookup(null, 'sens')(1, 0) === null).should.equal(true);
     });
   });
 

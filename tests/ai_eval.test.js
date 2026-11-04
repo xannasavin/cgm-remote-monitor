@@ -422,6 +422,31 @@ describe('ai_eval plugin', function () {
         payload.response_format.json_schema.should.have.property('name', 'CgmAnalysisSchema');
       });
 
+      it('should not leak pumpExtras from prepareCgmData into the prompts', function () {
+        var prepare = require('../lib/report_plugins/pump_analysis/data_processor').prepareCgmData;
+        var sgv = [];
+        for (var i = 0; i < 288; i++) sgv.push({ mills: 1710460800000 + i * 300000, sgv: 120 });
+        var result = prepare({
+          '2026-03-15': { sgv: sgv, treatments: [{ mills: 1710470000000, eventType: 'Meal Bolus', insulin: 4, carbs: 40 }] }
+          , profiles: []
+          , alldays: 1
+        }, {}, { targetLow: 70, targetHigh: 180 });
+        result.should.have.property('pumpExtras');
+        var payload = dataProcessor.buildSinglePayload(
+          result.cgmData
+          , {
+            system_prompt: 'sys {{CGMDATA_JSON}} {{STATS_JSON}}'
+            , user_prompt_template: 'usr {{CGMDATA_JSON}} {{STATS_JSON}} {{PROFILE_JSON}} {{TREATMENT_SUMMARY}}'
+          }
+          , {}
+          , 'en'
+        );
+        var json = JSON.stringify(payload.messages);
+        ['pumpExtras', 'recommendations', 'mealCases', 'readingsByDayMgdl', 'basisLine'].forEach(function (k) {
+          json.should.not.containEql(k);
+        });
+      });
+
       it('should still replace {{RETURNFORMAT}} if a user-customised prompt uses it', function () {
         var payload = dataProcessor.buildSinglePayload(
           makeCgmData()
@@ -1022,6 +1047,31 @@ describe('ai_eval in the report page', function () {
     area.textContent = 'old table';
     aiEval.report(fixture.ds, fixture.days, {});
     area.textContent.should.equal('');
+  });
+
+  it('report() timer is cleared by the next report() and survives a removed window', function () {
+    mount();
+    env.window.processAiEvaluationData = function () {};
+    var fixture = buildStorage(2);
+    var originalSet = global.setTimeout;
+    var originalClear = global.clearTimeout;
+    var scheduled = [];
+    var cleared = [];
+    global.setTimeout = function (fn) { scheduled.push(fn); return scheduled.length; };
+    global.clearTimeout = function (handle) { cleared.push(handle); };
+    var savedWindow = global.window;
+    try {
+      aiEval.report(fixture.ds, fixture.days, {});
+      aiEval.report(fixture.ds, fixture.days, {});
+      scheduled.should.have.length(2);
+      cleared.should.containEql(1);
+      delete global.window;
+      (function () { scheduled[1](); }).should.not.throw();
+    } finally {
+      global.window = savedWindow;
+      global.setTimeout = originalSet;
+      global.clearTimeout = originalClear;
+    }
   });
 
   it('shows an error box and skips AI requests when the analysis throws', function () {
