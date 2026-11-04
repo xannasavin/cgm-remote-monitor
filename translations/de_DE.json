@@ -871,7 +871,8 @@
     "Data: %1 corrections, %2 clean; %3 unclear boluses not evaluated": "Datenbasis: %1 Korrekturen, davon %2 sauber; %3 unklare Boli nicht ausgewertet",
     "Only %1 clean corrections (BG above %2, no food 3 h before and after), at least %3 needed": "nur %1 saubere Korrekturen (BZ über %2, kein Essen 3 h davor und danach), mindestens %3 nötig",
     "Median measured drop %1 per U (profile %2)": "gemessener Abfall im Median %1 pro U (Profil %2)",
-    "%1 corrections for a fast rise not measured": "%1 Korrekturen wegen schnellen Anstiegs nicht gemessen",
+    "%1 corrections for a fast rise not measured": "%1 Korrekturen wegen schnellen Anstiegs nicht gemessen"
+,
     "Recommendations": "Empfehlungen",
     "Calculation aid, not a therapy instruction. Change only one parameter at a time.": "Rechenhilfe, keine Therapieanweisung. Ändere immer nur einen Parameter auf einmal.",
     "Correction factor": "Korrekturfaktor",
@@ -892,6 +893,10 @@
     "Confidence high": "Vertrauen hoch",
     "Confidence medium": "Vertrauen mittel",
     "Confidence low": "Vertrauen niedrig",
+    "Confidence: %1 % of the cases point in this direction (medium from %2 %, high from %3 % with at least %4 cases)": "Vertrauen: %1 % der Fälle zeigen in diese Richtung (mittel ab %2 %, hoch ab %3 % bei mindestens %4 Fällen)",
+    "Confidence: %1 % of the cases point in this direction (medium from %2 %, high from %3 % with at least %4 cases), counter-signal on %5 days lowers it by one level": "Vertrauen: %1 % der Fälle zeigen in diese Richtung (mittel ab %2 %, hoch ab %3 % bei mindestens %4 Fällen), Gegensignal an %5 Tagen senkt um eine Stufe",
+    "Also show cards with low confidence or not enough data (%1)": "Auch Karten mit niedrigem Vertrauen oder zu wenig Daten zeigen (%1)",
+    "No recommendation with at least medium confidence.": "Keine Empfehlung mit mindestens mittlerem Vertrauen.",
     "%1 %2, no change possible within %3 %": "%1 %2, keine Änderung möglich innerhalb von %3 %",
     "%1, no change possible within %2 %": "%1, keine Änderung möglich innerhalb von %2 %",
     "Not enough data": "Zu wenig Daten",

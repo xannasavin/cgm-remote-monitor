@@ -813,6 +813,46 @@ describe('pump_analysis recommendations_renderer', function () {
     html.should.not.containEql('<b>x</b>');
   });
 
+  it('renders each card as a collapsed details element with the head as summary', function () {
+    var html = recRenderer.renderRecommendations(rec([card()]));
+    html.should.match(/<details class="rec-card">\s*<summary class="rec-head">/);
+    html.should.not.containEql('<details class="rec-card" open');
+    html.indexOf('</summary>').should.be.below(html.indexOf('rec-reasons'));
+  });
+
+  it('renders the confidence note in the card body', function () {
+    var html = recRenderer.renderRecommendations(rec([card({
+      confidenceNote: { key: 'Confidence: %1 % of the cases point in this direction (medium from %2 %, high from %3 % with at least %4 cases)', args: ['55', '60', '75', '7'] }
+    })]));
+    html.should.containEql('<div class="rec-confidence">Confidence: 55 % of the cases point in this direction (medium from 60 %, high from 75 % with at least 7 cases)</div>');
+  });
+
+  it('marks low and insufficient cards as minor and counts them in the filter', function () {
+    var html = recRenderer.renderRecommendations(rec([
+      card({ confidence: 'high' })
+      , card({ confidence: 'medium' })
+      , card({ confidence: 'low' })
+      , card({ state: 'insufficient', confidence: 'insufficient', rows: [] })
+      , card({ state: 'warning', confidence: 'warning' })
+    ]));
+    (html.match(/rec-minor/g) || []).length.should.equal(2);
+    html.should.containEql('<input type="checkbox" id="recShowAll" class="rec-toggle">');
+    html.should.containEql('Also show cards with low confidence or not enough data (2)');
+    html.indexOf('rec-toggle').should.be.below(html.indexOf('rec-list'));
+    html.should.not.containEql('rec-empty');
+  });
+
+  it('renders no filter when every card has at least medium confidence', function () {
+    var html = recRenderer.renderRecommendations(rec([card({ confidence: 'high' })]));
+    html.should.not.containEql('rec-toggle');
+    html.should.not.containEql('rec-minor');
+  });
+
+  it('says so when no card reaches medium confidence', function () {
+    var html = recRenderer.renderRecommendations(rec([card({ confidence: 'low' })]));
+    html.should.containEql('No recommendation with at least medium confidence.');
+  });
+
   it('renderStats puts the cards after the intro and before the period statistics', function () {
     var pumpActionStats = { basal_source: 'pump', coverage: { pump_days: 1, total_days: 1 } };
     var html = statsRenderer.renderStats({}, [], {}, [], pumpActionStats, null, { recommendations: rec([card()]) });
@@ -1486,10 +1526,12 @@ describe('pump_analysis percentile bands and five ranges', function () {
   });
 
   describe('dailyRanges', function () {
+    var LIMITS = { veryLow: 54, low: 70, high: 180, veryHigh: 250 };
+
     it('splits readings into five ranges with mg/dl limits', function () {
       var out = dist.dailyRanges({ '2026-03-14': [
         { sgv: 40 }, { sgv: 60 }, { sgv: 100 }, { sgv: 200 }, { sgv: 300 }
-      ] }, 70, 180);
+      ] }, LIMITS);
       out.should.have.length(1);
       out[0].dateKey.should.equal('2026-03-14');
       ['veryLow', 'low', 'inRange', 'high', 'veryHigh'].forEach(function (k) {
@@ -1498,7 +1540,7 @@ describe('pump_analysis percentile bands and five ranges', function () {
     });
 
     it('treats the boundaries as specified', function () {
-      var out = dist.dailyRanges({ d: [{ sgv: 54 }, { sgv: 70 }, { sgv: 180 }, { sgv: 250 }] }, 70, 180);
+      var out = dist.dailyRanges({ d: [{ sgv: 54 }, { sgv: 70 }, { sgv: 180 }, { sgv: 250 }] }, LIMITS);
       out[0].veryLow.should.equal(0);
       out[0].low.should.equal(25);
       out[0].inRange.should.equal(50);
@@ -1507,7 +1549,22 @@ describe('pump_analysis percentile bands and five ranges', function () {
     });
 
     it('skips days without readings', function () {
-      dist.dailyRanges({ a: [], b: [{ sgv: 100 }] }, 70, 180).map(function (r) { return r.dateKey; }).should.eql(['b']);
+      dist.dailyRanges({ a: [], b: [{ sgv: 100 }] }, LIMITS).map(function (r) { return r.dateKey; }).should.eql(['b']);
+    });
+  });
+
+  describe('rangeLimits', function () {
+    it('takes very low and very high from BG_LOW and BG_HIGH', function () {
+      dist.rangeLimits({ bgLow: 55, bgHigh: 260 }, 80, 190).should.eql({ veryLow: 55, low: 80, high: 190, veryHigh: 260 });
+    });
+
+    it('falls back to 54 and 250 without usable thresholds', function () {
+      dist.rangeLimits(undefined, 70, 180).should.eql({ veryLow: 54, low: 70, high: 180, veryHigh: 250 });
+      dist.rangeLimits({ bgLow: NaN, bgHigh: 'x' }, 70, 180).should.eql({ veryLow: 54, low: 70, high: 180, veryHigh: 250 });
+    });
+
+    it('clamps the thresholds to the target range of the report', function () {
+      dist.rangeLimits({ bgLow: 90, bgHigh: 150 }, 80, 190).should.eql({ veryLow: 80, low: 80, high: 190, veryHigh: 190 });
     });
   });
 
@@ -1559,6 +1616,21 @@ describe('pump_analysis percentile bands and five ranges', function () {
       ['Very Low', 'Low', 'In Range', 'High', 'Very High'].forEach(function (label) {
         legend.should.containEql(label);
       });
+    });
+
+    it('shows the value range of every segment in the legend (mg/dl)', function () {
+      charts.renderDailyTirChart('#chart', ranges, [], { veryLow: 55, low: 80, high: 190, veryHigh: 260 }, 'mg/dl');
+      var legend = doc().querySelector('#chart g.cgm-tir-legend').textContent;
+      ['Very Low (< 55)', 'Low (55\u201379)', 'In Range (80\u2013190)', 'High (191\u2013260)', 'Very High (> 260)'].forEach(function (label) {
+        legend.should.containEql(label);
+      });
+    });
+
+    it('shows mmol legend values with one decimal', function () {
+      var v = charts.rangeLegendValues({ veryLow: 54, low: 70, high: 180, veryHigh: 250 }, 'mmol');
+      v.veryLow.should.equal('< 3.0');
+      v.inRange.should.equal('3.9\u201310.0');
+      v.veryHigh.should.equal('> 13.9');
     });
 
     it('uses distinct colours for the five ranges', function () {
@@ -1625,6 +1697,9 @@ describe('pump_analysis percentile bands and five ranges', function () {
       result.pumpExtras.diurnalPercentiles.should.be.an.Array();
       result.pumpExtras.diurnalPercentiles.length.should.be.above(0);
       result.pumpExtras.dailyRanges.should.have.length(2);
+      result.pumpExtras.rangeLimits.should.eql({ veryLow: 54, low: 70, high: 180, veryHigh: 250 });
+      var withThresholds = dataProcessor.prepareCgmData(storage, { thresholds: { bgLow: 55, bgHigh: 260 } }, { targetLow: 70, targetHigh: 180 }, ['2026-03-14', '2026-03-15']);
+      withThresholds.pumpExtras.rangeLimits.should.eql({ veryLow: 55, low: 70, high: 180, veryHigh: 260 });
       JSON.stringify(result.cgmData).should.not.containEql('diurnalPercentiles');
       JSON.stringify(result.periodStats).should.not.containEql('p90');
     });
